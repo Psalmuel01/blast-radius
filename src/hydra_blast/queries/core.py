@@ -32,12 +32,18 @@ def _now_ms() -> float:
 
 
 def _parse_ts(value: str | None) -> datetime | None:
+    """Parse a timestamp as tz-aware UTC.
+
+    npm and OSV are inconsistent about offsets; naive values are treated as UTC
+    so window comparisons never raise on mixed inputs.
+    """
     if not value:
         return None
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
+    return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
 
 
 @dataclass

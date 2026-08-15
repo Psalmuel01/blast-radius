@@ -59,6 +59,15 @@ class CrawlResult:
 
 def _hydrate(record: PackageRecord) -> None:
     """Fill a record from the npm packument (versions, deps, maintainers)."""
+    # Seeds arrive with no download count (they were never returned as some
+    # other package's dependent), and typosquat scoring compares against the
+    # target's downloads -- so fetch the stats the crawl did not supply.
+    if record.downloads is None or record.first_release is None:
+        stats = sources.fetch_package_stats(record.name) or {}
+        if record.downloads is None:
+            record.downloads = stats.get("downloads")
+        record.first_release = record.first_release or stats.get("first_release_published_at")
+
     packument = sources.fetch_package(record.name)
     if not packument:
         return

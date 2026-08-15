@@ -145,7 +145,15 @@ def _attach_advisory_nodes(crawl: CrawlResult, graph: Graph) -> None:
                 )
             )
 
-            for version in sources.affected_versions(advisory, record.name):
+            affected = sources.affected_versions(advisory, record.name)
+            if not affected:
+                # OSV expresses impact either as an explicit `versions` list or
+                # as introduced/fixed `ranges`. Range-only advisories (e.g.
+                # GHSA-jmr9-qjv8-65gv) would otherwise attach to nothing, so
+                # expand the range against the versions we actually know.
+                affected = _versions_in_ranges(advisory, record, graph)
+
+            for version in affected:
                 version_node = ver_id(record.name, version)
                 # The affected version may not be in `versions` if npm pulled
                 # it; the crawler reconstructs those, but guard anyway.
@@ -172,6 +180,38 @@ def _attach_advisory_nodes(crawl: CrawlResult, graph: Graph) -> None:
                         context=f"{osv_id} affects {record.name}@{version}",
                     )
                 )
+
+
+def _versions_in_ranges(advisory: dict, record, graph: Graph) -> list[str]:
+    """Expand OSV introduced/fixed ranges into concrete known versions.
+
+    A version is affected when introduced <= v < fixed (fixed may be absent,
+    meaning "still affected").
+    """
+    from .model import parse_version
+
+    pairs = sources.affected_introduced(advisory, record.name)
+    if not pairs:
+        return []
+
+    matched: list[str] = []
+    for version in record.versions:
+        parsed = parse_version(version)
+        if parsed is None:
+            continue
+        for introduced, fixed in pairs:
+            low = parse_version(introduced) if introduced not in ("0", None) else (0, 0, 0)
+            if low is None:
+                continue
+            if parsed < low:
+                continue
+            if fixed:
+                high = parse_version(fixed)
+                if high is not None and parsed >= high:
+                    continue
+            matched.append(version)
+            break
+    return sorted(set(matched))
 
 
 def _severity_of(advisory: dict) -> str | None:
