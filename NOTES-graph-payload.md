@@ -60,8 +60,25 @@ Notes:
 - `namespace` round-trips intact → entity typing (Package/Version/Maintainer/
   Advisory) is preserved, which is what makes typed traversal possible.
 - `entity_id` is server-assigned (md5-looking); our keys are join handles only.
-- **`temporal_details`** exists on the relation — worth pushing the live-window
-  timestamps into. Shape still unverified; probe before relying on it.
+## Relation fields: what is *accepted* vs what actually *persists*
+
+Accepted-at-ingest and stored are different things. Verified by round-trip:
+
+| field | accepted | persists | notes |
+|---|---|---|---|
+| `predicate` | yes | yes | reads back as `canonical_predicate` + `raw_predicate` |
+| `context` | yes | **yes, verbatim** | free-text carrier — reliable |
+| `temporal_details` | **string only** | **yes, verbatim** | an *object* fails the outer parser |
+| `timestamp` | yes | **no — overwritten** | replaced by server ingest time |
+| `confidence` | yes | **no — coerced** | sent 0.99, stored 0.8 |
+| `properties` | yes | **no — dropped silently** | accepted then discarded |
+| `metadata` | yes | **no — dropped silently** | accepted then discarded |
+
+**Consequence for this project:** `context` and `temporal_details` are the only
+dependable places to put the declared semver range and the live window. Do not
+trust `properties`/`metadata` (silently lost) or `timestamp` (rewritten). The
+local graph stays the source of truth for exact times; HydraDB carries the
+traversable structure plus these two string attributes.
 
 ## Gotchas that cost time
 1. `entities` as a list → outer "invalid graph_payload JSON" error that points at
