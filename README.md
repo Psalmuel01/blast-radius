@@ -1,0 +1,166 @@
+# Blast Radius — supply-chain exposure as a graph traversal
+
+When an npm package is compromised, a defender has minutes, not days, to answer:
+**what did this actually reach?**
+
+This builds a temporal dependency graph of the npm ecosystem in
+[HydraDB](https://hydradb.com) and answers that question as a graph traversal —
+not a similarity search. It is seeded with a real incident: the **September 2025
+npm account-takeover campaign**, in which 17 packages including `debug` and
+`chalk` were published with a crypto-stealing payload after a maintainer account
+was phished.
+
+```
+$ python -m hydra_blast blast debug@4.4.2
+
+  blast_radius  <debug@4.4.2>
+  63.2 ms
+    exposed_versions: 482
+    exposed_packages: 14
+    max_depth_reached: 2
+```
+
+## Why a graph, and why HydraDB
+
+"Which packages are transitively exposed to `debug@4.4.2`?" is not a question a
+vector index can answer. It is a reachability question over typed, timestamped
+edges, and the answer has to be *exact* — a defender acting on a fuzzy top-k list
+of "semantically similar packages" would patch the wrong things.
+
+Every query here is a traversal over entities HydraDB stores explicitly:
+
+| Entity | Edge | Meaning |
+|---|---|---|
+| `Package` | `has_version` → `Version` | release history, timestamped |
+| `Version` | `depends_on` → `Package` | **the declared semver range**, not a resolved pin |
+| `Maintainer` | `maintains` → `Package` | the account an attacker actually compromises |
+| `Advisory` | `affects` → `Version` | OSV/GHSA ground truth |
+
+The critical modelling choice is that `depends_on` stores the **declared range**
+(`^4.1.1`), not a resolved version. Blast radius is then computed by asking, for
+every inbound edge, whether the compromised version *satisfies* that range. Store
+a resolved pin instead and the question becomes unanswerable after the fact.
+
+**What this project would lose without HydraDB:** the graph is written through
+HydraDB's `graph_payload` ingestion path, which stores caller-defined entities
+and predicates rather than LLM-extracted ones — so `depends_on` means exactly
+what the manifest said, with no extraction confidence to second-guess. Edges keep
+their validity window in `temporal_details`, which is what makes the
+"while it was live" query answerable rather than approximate. Relations are read
+back with `GET /context/relations` and stay queryable alongside the same
+database's semantic recall, so the structural answer and the human-readable
+advisory text live in one system instead of two.
+
+## Install
+
+Python 3.10+, no third-party runtime dependencies.
+
+```bash
+git clone <repo-url> && cd Hydra
+cp .env.example .env          # add your HydraDB key from https://app.hydradb.com
+```
+
+`.env`:
+```
+HYDRA_DB_API_KEY=sk_live_...
+HYDRA_DB_DATABASE=hydra_blast_radius
+GITHUB_TOKEN=                  # optional; OSV needs no key
+```
+
+## Use
+
+```bash
+# 1. Build the graph from the 17 confirmed-compromised seeds.
+python -m hydra_blast crawl --hops 2
+
+# 2. The headline query: what did the bad version reach?
+python -m hydra_blast blast debug@4.4.2
+
+# 3. What else can the compromised account publish to?
+python -m hydra_blast maintainer debug
+
+# 4. Who actually resolved to it *while it was live*?
+#    The window is derived from the graph: publish time -> advisory time.
+python -m hydra_blast window debug@4.4.2 --advisory MAL-2025-46974
+
+# 5. Plausible typosquats.
+python -m hydra_blast typosquat chalk
+
+# 6. Which version introduced it, and what fixed it?
+python -m hydra_blast introduced MAL-2025-46974
+
+# Push the graph into HydraDB, then score yourself.
+python -m hydra_blast sync --wait
+python eval/run_eval.py --cutoff 2025-09-01
+```
+
+Add `--json` for machine-readable output, `--limit N` to show more rows.
+
+## Evaluation
+
+`eval/run_eval.py` mirrors how the hackathon says judges will test: hold out
+advisories published after a cutoff, then check whether the system still finds
+the right exposure.
+
+Blast radius is scored against ground truth computed by a **brute-force scan of
+every dependency edge in the graph**, implemented independently of the traversal.
+The traversal is not allowed to grade its own homework.
+
+```
+  detection      recall=1.0  hits=28  misses=0
+  blast radius   precision=1.0  recall=1.0  f1=1.0  (n=28)
+  latency:
+    blast_radius             p50=0.0ms  p95=6.1ms  max=63.2ms
+```
+
+## What was hard, and what it taught
+
+Three findings changed the design; all are reproducible from the code.
+
+**1. npm deletes the evidence.** The malicious `debug@4.4.2` has been unpublished:
+it is *gone* from the registry's `versions` map. But its timestamp survives in
+`time`. An ingester that walks only `versions` silently drops the compromised
+release and reports an empty blast radius **for the exact incident being
+investigated**. These versions are reconstructed from `time` and flagged
+`unpublished`.
+
+**2. npm has no reverse-dependency API.** Blast radius needs *dependents*, and
+`registry.npmjs.org/-/v1/search?text=depended:debug` returns `total: 0`.
+[ecosyste.ms](https://ecosyste.ms) fills the gap, and its download counts also
+drive both the crawl ranking and typosquat scoring.
+
+**3. The ecosystem is far denser than it looks.** `chalk` alone has **130,085**
+direct dependents; five seeds have 183,768 between them. An unbounded 2–3 hop
+crawl reaches millions of packages. The crawl instead keeps the top-K dependents
+*by download count* at each hop — a defensible cut, since that is where a real
+compromise does the most damage, and one config constant to widen.
+
+Reverse-engineering HydraDB's explicit-graph ingestion is documented in
+[NOTES-graph-payload.md](NOTES-graph-payload.md) — the parameter is undocumented,
+so the schema was derived from the validator's own error messages.
+
+## Correctness
+
+`satisfies()` decides the entire blast radius, so it is **differentially tested
+against npm's own `semver` package: 221/221 cases agree**, including the
+`^0.0.3` edge case that the comparison caught as a bug. Non-registry specs
+(`git:`, `file:`, `workspace:`, `npm:` aliases) return `False` rather than guess.
+
+```bash
+python3 tests/test_semver.py     # 8 passed
+python3 tests/test_queries.py    # 8 passed
+```
+
+Query tests run on synthetic fixtures because real data cannot exercise the
+negative cases — every version in the live incident neighbourhood was published
+years before the compromise, so the window filter never has to exclude anything.
+
+## Attribution
+
+- **[OSV.dev](https://osv.dev)** — vulnerability ground truth (Google, open data)
+- **[GitHub Advisory Database](https://github.com/advisories)** — GHSA cross-reference
+- **[npm registry](https://registry.npmjs.org)** — package metadata
+- **[ecosyste.ms](https://ecosyste.ms)** — reverse dependencies and download counts
+- **[HydraDB](https://hydradb.com)** — graph storage and retrieval
+
+Built for [Hack Hydra](https://hackhydra.hydradb.com) Track 2A. MIT licensed.

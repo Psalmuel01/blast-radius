@@ -54,8 +54,8 @@ def _is_confusable(a: str, b: str) -> tuple[bool, str | None]:
     norm_b = b.replace("-", "").replace("_", "").replace(".", "")
     if norm_a == norm_b:
         return True, "separator-variant"
-    # Common digit/letter homoglyphs
-    table = str.maketrans({"0": "o", "1": "l", "5": "s", "3": "e"})
+    # Common digit/letter homoglyphs (leetspeak substitutions squatters use).
+    table = str.maketrans({"0": "o", "1": "l", "3": "e", "4": "a", "5": "s", "7": "t", "8": "b"})
     if norm_a.translate(table) == norm_b.translate(table):
         return True, "homoglyph"
     # Prefix/suffix padding: "chalk" vs "chalk-js", "node-chalk"
@@ -95,6 +95,9 @@ def typosquat_candidates(
         bare = _strip_scope(name)
 
         distance = levenshtein(bare, bare_target, cap=max_distance)
+        # Always evaluate the structural patterns, even when the name is already
+        # within edit distance: `ch4lk` is distance 1 *and* a homoglyph, and the
+        # pattern is the more useful thing to report to an analyst.
         confusable, pattern = _is_confusable(bare, bare_target)
         if distance > max_distance and not confusable:
             continue
