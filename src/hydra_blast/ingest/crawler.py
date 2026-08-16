@@ -132,8 +132,15 @@ def crawl(
         if progress:
             log.info("hop %d: hydrating %d package(s)", hop, len(frontier))
 
-        for record in frontier:
-            _hydrate(record)
+        for index, record in enumerate(frontier, start=1):
+            try:
+                _hydrate(record)
+            except Exception as exc:  # noqa: BLE001 - one bad package must not
+                # abort a multi-hour crawl. The HTTP layer already retries;
+                # anything reaching here is unexpected, so log and continue.
+                log.warning("hydrate failed for %s: %s", record.name, exc)
+            if progress and index % 500 == 0:
+                log.info("  hop %d: hydrated %d/%d", hop, index, len(frontier))
 
         if hop == config.max_hops:
             break

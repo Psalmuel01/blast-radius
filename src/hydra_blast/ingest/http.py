@@ -90,6 +90,12 @@ def request_json(
                 return None
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
             last_error = str(exc)
+        except OSError as exc:
+            # ConnectionResetError and friends are OSError, NOT URLError, so
+            # they escape the clause above. A long crawl WILL hit these -- npm
+            # reset the connection an hour into a full run -- and an uncaught
+            # reset kills the whole crawl.
+            last_error = f"{type(exc).__name__}: {exc}"
 
         if attempt < CRAWL.max_retries - 1:
             time.sleep(CRAWL.backoff_base * (2**attempt))
