@@ -15,6 +15,7 @@ import json
 import logging
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import CRAWL, GRAPH_PATH, SEED_ADVISORIES, SEEDS, CrawlConfig
@@ -69,6 +70,27 @@ def _load_graph(path: Path, args=None) -> Graph:
             f"or query HydraDB directly with --from-hydra"
         )
     return Graph.load(path)
+
+
+def _require_package(graph: Graph, package: str) -> None:
+    """Fail loudly when the queried package is not in the graph.
+
+    An empty result for a package that was never crawled looks identical to a
+    genuine "nothing found", which is how a 6-package test graph passed for a
+    real one. Say which it is.
+    """
+    from .graph.model import pkg_id
+
+    if pkg_id(package) in graph.entities:
+        return
+    detail = graph.describes()
+    sys.exit(
+        f"'{package}' is not in this graph, so any result would be empty and "
+        f"misleading.\n"
+        f"  graph: {len(graph.entities):,} entities, built from {detail}\n"
+        f"  rebuild including it, e.g.:\n"
+        f"    python -m hydra_blast crawl --hops 1 --top1 40"
+    )
 
 
 def _split_spec(spec: str) -> tuple[str, str | None]:
@@ -135,7 +157,14 @@ def cmd_crawl(args) -> None:
     sys.stdout.flush()
     result = run_crawl(seeds=seeds, config=config)
     print("crawl:", result.stats())
-    graph = build_graph(result)
+    graph = build_graph(result, provenance={
+        "seeds": list(seeds),
+        "max_hops": config.max_hops,
+        "top_dependents_hop1": config.top_dependents_hop1,
+        "top_dependents_deeper": config.top_dependents_deeper,
+        "max_packages": config.max_packages,
+        "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    })
     print("graph:", graph.stats())
 
     # Refuse to silently replace a substantially larger graph -- a quick test
@@ -162,12 +191,14 @@ def cmd_blast(args) -> None:
     package, version = _split_spec(args.spec)
     if not version:
         sys.exit("blast needs a version: e.g. debug@4.4.2")
+    _require_package(graph, package)
     _emit(blast_radius(graph, package, version, max_depth=args.depth), args.json, args.limit)
 
 
 def cmd_maintainer(args) -> None:
     graph = _load_graph(args.graph, args)
     package, _ = _split_spec(args.spec)
+    _require_package(graph, package)
     _emit(shared_maintainer(graph, package), args.json, args.limit)
 
 
@@ -176,6 +207,7 @@ def cmd_window(args) -> None:
     package, version = _split_spec(args.spec)
     if not version:
         sys.exit("window needs a version: e.g. debug@4.4.2")
+    _require_package(graph, package)
 
     start, end = args.start, args.end
     if args.advisory and not (start and end):
@@ -196,6 +228,7 @@ def cmd_window(args) -> None:
 def cmd_typosquat(args) -> None:
     graph = _load_graph(args.graph, args)
     package, _ = _split_spec(args.spec)
+    _require_package(graph, package)
     _emit(typosquat_candidates(graph, package, max_distance=args.distance), args.json, args.limit)
 
 

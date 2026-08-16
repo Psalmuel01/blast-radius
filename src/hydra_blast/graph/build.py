@@ -33,8 +33,15 @@ from .model import (
 log = logging.getLogger(__name__)
 
 
-def build_graph(crawl: CrawlResult, *, fetch_advisories: bool = True) -> Graph:
+def build_graph(
+    crawl: CrawlResult,
+    *,
+    fetch_advisories: bool = True,
+    provenance: dict | None = None,
+) -> Graph:
     graph = Graph()
+    if provenance:
+        graph.provenance = dict(provenance)
 
     for record in crawl.packages.values():
         package_node = pkg_id(record.name)

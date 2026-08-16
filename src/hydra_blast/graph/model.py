@@ -198,6 +198,10 @@ def satisfies(version: str, range_spec: str | None) -> bool:
 class Graph:
     entities: dict[str, Entity] = field(default_factory=dict)
     edges: list[Edge] = field(default_factory=list)
+    # How this graph was built (seeds, hops, caps). Without it a scoped-down
+    # test crawl is indistinguishable from a real one once saved, and queries
+    # silently return empty for packages that were simply never crawled.
+    provenance: dict = field(default_factory=dict)
     _edge_keys: set = field(default_factory=set, repr=False)
     # Adjacency built on demand.
     _out: dict[str, list[int]] = field(default_factory=dict, repr=False)
@@ -249,6 +253,7 @@ class Graph:
 
     def save(self, path) -> None:
         payload = {
+            "provenance": self.provenance,
             "entities": [asdict(e) for e in self.entities.values()],
             "edges": [asdict(e) for e in self.edges],
         }
@@ -259,9 +264,25 @@ class Graph:
     def load(cls, path) -> "Graph":
         data = json.loads(path.read_text())
         graph = cls()
+        graph.provenance = data.get("provenance") or {}
         for raw in data.get("entities", []):
             graph.add_entity(Entity(**raw))
         for raw in data.get("edges", []):
             raw.pop("key", None)
             graph.add_edge(Edge(**raw))
         return graph
+
+    def describes(self) -> str:
+        """One-line summary of how this graph was built."""
+        p = self.provenance
+        if not p:
+            return "provenance unknown (built before provenance was recorded)"
+        seeds = p.get("seeds") or []
+        seed_text = f"{len(seeds)} seed(s)"
+        if 0 < len(seeds) <= 4:
+            seed_text += f" [{', '.join(seeds)}]"
+        return (
+            f"{seed_text}, hops={p.get('max_hops')}, "
+            f"top1={p.get('top_dependents_hop1')}, "
+            f"max_packages={p.get('max_packages')}"
+        )
