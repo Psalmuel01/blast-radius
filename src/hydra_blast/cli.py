@@ -156,7 +156,8 @@ def cmd_sync(args) -> None:
         client.database = args.database
     print(f"syncing {len(graph.edges)} edges -> HydraDB database '{client.database}'")
     summary = sync_graph(graph, client, batch_size=args.batch_size,
-                         max_batches=args.max_batches, wait=args.wait)
+                         max_batches=args.max_batches, wait=args.wait,
+                         workers=args.workers)
     print("sync:", summary)
 
 
@@ -218,6 +219,8 @@ def main(argv=None) -> None:
     p.add_argument("--max-batches", type=int)
     p.add_argument("--database")
     p.add_argument("--wait", action="store_true")
+    p.add_argument("--workers", type=int, default=4,
+                   help="parallel ingest requests (default 4; 1 = sequential)")
     p.set_defaults(func=cmd_sync)
 
     p = sub.add_parser("seeds", help="list the confirmed compromised seeds", **sub_kwargs)

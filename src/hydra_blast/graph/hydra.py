@@ -19,6 +19,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from ..config import HYDRA_API_VERSION, HYDRA_BASE_URL, hydra_api_key, hydra_database
@@ -223,6 +224,7 @@ def sync_graph(
     max_batches: int | None = None,
     wait: bool = False,
     progress: bool = True,
+    workers: int = 4,
 ) -> dict:
     """Ingest the whole graph, returning a summary."""
     client = client or HydraClient.from_env()
@@ -233,15 +235,39 @@ def sync_graph(
     sent = 0
     failed = 0
     started = time.time()
-    for source_id, entities, relations, text in batches:
+
+    def _send(batch):
+        source_id, entities, relations, text = batch
         try:
             client.ingest_batch(source_id, entities, relations, text)
-            sent += 1
-            if progress and sent % 10 == 0:
-                log.info("ingested %d/%d batches", sent, len(batches))
+            return True, source_id, None
         except HydraError as exc:
-            failed += 1
-            log.warning("batch %s failed: %s", source_id, exc)
+            return False, source_id, str(exc)
+        except OSError as exc:
+            return False, source_id, f"{type(exc).__name__}: {exc}"
+
+    if workers > 1:
+        # Bounded parallelism: ~1.6s/batch sequentially means a large graph
+        # takes far too long, but an unbounded fan-out is rude to the API.
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for ok, source_id, error in pool.map(_send, batches):
+                if ok:
+                    sent += 1
+                    if progress and sent % 25 == 0:
+                        log.info("ingested %d/%d batches", sent, len(batches))
+                else:
+                    failed += 1
+                    log.warning("batch %s failed: %s", source_id, error)
+    else:
+        for batch in batches:
+            ok, source_id, error = _send(batch)
+            if ok:
+                sent += 1
+                if progress and sent % 25 == 0:
+                    log.info("ingested %d/%d batches", sent, len(batches))
+            else:
+                failed += 1
+                log.warning("batch %s failed: %s", source_id, error)
 
     summary = {
         "batches": len(batches),
