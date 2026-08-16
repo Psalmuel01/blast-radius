@@ -34,13 +34,37 @@ def iter_versions(packument: dict) -> Iterator[tuple[str, dict]]:
 
 
 def version_dependencies(version_doc: dict) -> dict[str, str]:
-    """Runtime dependencies for one version.
+    """Runtime dependencies for one version, as {name: range-string}.
 
-    `debug@4.4.2` -- the headline compromised version -- has *no* `dependencies`
-    key at all, so this must never assume the field exists.
+    Two shapes have to be tolerated, both seen in live registry data:
+
+    * `debug@4.4.2` -- the headline compromised version -- has *no*
+      `dependencies` key at all, so the field cannot be assumed to exist.
+    * A few very old packages (e.g. `megaice@0.0.1`) use a legacy nested form
+      where the value is an object like `{"version": "1.2.5", ...}` rather than
+      a range string. Left unhandled that dict flows into the edge's
+      `declared_range`, becomes part of the edge key, and raises
+      `TypeError: unhashable type: 'dict'` -- which killed a full crawl at the
+      graph-building step after hours of fetching.
     """
     deps = version_doc.get("dependencies")
-    return dict(deps) if isinstance(deps, dict) else {}
+    if not isinstance(deps, dict):
+        return {}
+
+    cleaned: dict[str, str] = {}
+    for name, spec in deps.items():
+        if not isinstance(name, str):
+            continue
+        if isinstance(spec, str):
+            cleaned[name] = spec
+        elif isinstance(spec, dict):
+            # Legacy nested form: pull the version out if it is usable.
+            version = spec.get("version")
+            if isinstance(version, str):
+                cleaned[name] = version
+        # Anything else (list, number, None) has no usable range: skip it
+        # rather than guess, matching how unparseable specs are handled.
+    return cleaned
 
 
 def package_maintainers(packument: dict) -> list[str]:

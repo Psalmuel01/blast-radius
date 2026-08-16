@@ -62,6 +62,15 @@ class Edge:
     valid_to: str | None = None
     context: str | None = None
 
+    def __post_init__(self) -> None:
+        # Registry data occasionally supplies a non-string range (a legacy
+        # nested dependency object). The key must stay hashable, so coerce
+        # here rather than letting it reach add_edge and abort the build.
+        if self.declared_range is not None and not isinstance(self.declared_range, str):
+            spec = self.declared_range
+            version = spec.get("version") if isinstance(spec, dict) else None
+            self.declared_range = version if isinstance(version, str) else None
+
     def key(self) -> tuple[str, str, str, str | None]:
         return (self.source, self.target, self.predicate, self.declared_range)
 

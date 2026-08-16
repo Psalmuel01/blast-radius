@@ -138,6 +138,32 @@ def test_version_introduced():
     assert row["affected_versions"] == ["1.2.0"]
 
 
+def test_legacy_nested_dependency_shape_does_not_crash():
+    """A few old packages declare dependencies as objects, not range strings.
+
+    `megaice@0.0.1` uses {"apn": {"version": "1.2.5"}}. Unhandled, that dict
+    reaches the edge key and raises `unhashable type: dict`, which killed a
+    full crawl at the graph-build step after hours of fetching.
+    """
+    from hydra_blast.ingest.sources import version_dependencies
+
+    deps = version_dependencies({
+        "dependencies": {
+            "apn": {"version": "1.2.5"},      # legacy nested form
+            "chalk": "^5.0.0",                 # normal form
+            "weird": [1, 2],                   # unusable -> dropped
+            "no-version": {"foo": "bar"},      # unusable -> dropped
+        }
+    })
+    assert deps == {"apn": "1.2.5", "chalk": "^5.0.0"}, deps
+
+    # And the graph must accept such an edge even if one slips through.
+    g = Graph()
+    g.add_edge(Edge("v:a@1.0.0", pkg_id("b"), P_DEPENDS_ON,
+                    declared_range={"version": "^1.0.0"}))
+    assert g.edges[0].declared_range == "^1.0.0"
+
+
 def test_latency_is_recorded():
     result = blast_radius(fixture(), "bad", "1.2.0")
     assert result.latency_ms > 0
