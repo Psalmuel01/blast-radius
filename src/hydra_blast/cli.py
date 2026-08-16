@@ -104,6 +104,22 @@ def cmd_crawl(args) -> None:
     print("crawl:", result.stats())
     graph = build_graph(result)
     print("graph:", graph.stats())
+
+    # Refuse to silently replace a substantially larger graph -- a quick test
+    # crawl should never destroy hours of crawling.
+    if args.graph.exists() and not args.force:
+        try:
+            existing = Graph.load(args.graph)
+        except Exception:  # noqa: BLE001 - unreadable graph is fine to replace
+            existing = None
+        if existing is not None and len(existing.edges) > len(graph.edges) * 2:
+            sys.exit(
+                f"refusing to overwrite {args.graph}: it holds "
+                f"{len(existing.edges):,} edges, the new graph has "
+                f"{len(graph.edges):,}.\n"
+                f"  pass --force to replace it, or --graph <other-path> to keep both."
+            )
+
     graph.save(args.graph)
     print(f"saved -> {args.graph}")
 
@@ -206,6 +222,8 @@ def main(argv=None) -> None:
     p.add_argument("--topn", type=int, default=CRAWL.top_dependents_deeper)
     p.add_argument("--max-packages", type=int, default=CRAWL.max_packages)
     p.add_argument("--seeds", nargs="*", help="override the seed list")
+    p.add_argument("--force", action="store_true",
+                   help="overwrite an existing larger graph")
     p.set_defaults(func=cmd_crawl)
 
     p = sub.add_parser("blast", help="transitive blast radius of a bad version", **sub_kwargs)
