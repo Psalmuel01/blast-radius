@@ -91,6 +91,15 @@ def cmd_crawl(args) -> None:
     seeds = args.seeds or SEEDS
     print(f"crawling {len(seeds)} seed(s), hops={config.max_hops}, "
           f"top1={config.top_dependents_hop1}, topn={config.top_dependents_deeper}")
+    if config.max_hops >= 2 and config.top_dependents_hop1 >= 100:
+        # Measured: hop 2 expands to ~11k packages at ~1/sec. Worth saying so
+        # before someone walks away expecting a five-minute job.
+        print("  note: a full 2-hop crawl fetches ~12k packages and takes hours.\n"
+              "        for a quick start try:  --hops 1 --top1 40\n"
+              "        (responses are cached, so re-running resumes cheaply)")
+    # stdout is buffered while logging writes to stderr; flush so these lines
+    # appear before the crawl's own progress output rather than after it.
+    sys.stdout.flush()
     result = run_crawl(seeds=seeds, config=config)
     print("crawl:", result.stats())
     graph = build_graph(result)
@@ -150,10 +159,18 @@ def cmd_sync(args) -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     from .graph.hydra import HydraClient, sync_graph
 
-    graph = _load_graph(args.graph)
-    client = HydraClient.from_env()
+    # Check credentials before the graph: a missing API key reported as
+    # "no graph found" sends people down the wrong path entirely.
+    from .graph.hydra import HydraError
+
+    try:
+        client = HydraClient.from_env()
+    except HydraError as exc:
+        sys.exit(str(exc))
     if args.database:
         client.database = args.database
+
+    graph = _load_graph(args.graph)
     # State the destination up front: writing a graph into the wrong database
     # is silent and annoying to undo.
     print(f"syncing {len(graph.edges)} edges -> HydraDB database '{client.database}'"

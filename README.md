@@ -96,6 +96,11 @@ the `.env` value for one-off runs.
 
 ```bash
 # 1. Build the graph from the 17 confirmed-compromised seeds.
+#    Quick start (~2 min) -- enough to run every query below:
+python -m hydra_blast crawl --hops 1 --top1 40
+
+#    Full graph (~12k packages, several hours -- responses are cached, so
+#    an interrupted run resumes cheaply):
 python -m hydra_blast crawl --hops 2
 
 # 2. The headline query: what did the bad version reach?
