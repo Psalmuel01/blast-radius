@@ -1,22 +1,34 @@
 """Evaluation harness: score precision/recall/latency on held-out advisories.
 
-Mirrors how the brief says judges will test: hold out advisories published after
-a cutoff, rebuild the graph without them, then ask whether the system still
-identifies the right exposure.
+Advisories published on or after `--cutoff` are held out, and the graph is
+rebuilt without them before anything is scored.
+
+**What "held out" means here.** Only the advisory *knowledge* is removed: the
+Advisory node and its `affects` edges -- i.e. the assertion "this version is
+compromised". The compromised Version node itself stays, along with every
+dependency edge, because `blast_radius` traverses *from* that version. Deleting
+it would turn the test into "can you find a package that does not exist", which
+is not the defensive question. The question is: given a version the system was
+never told was bad, does it still resolve the exposure correctly?
 
 Two things are measured, and they answer different questions:
 
-  * **Advisory recall** -- given a held-out advisory, does the graph contain the
-    affected version and correctly identify it as compromised? This is the
-    detection question.
-  * **Blast-radius agreement** -- does the traversal find the dependents that a
-    direct scan of every manifest in the graph says are exposed? This is the
-    correctness question, scored against ground truth computed independently of
-    the traversal (a brute-force scan), so it is a real check rather than the
-    query grading its own homework.
+  * **Detection recall** -- with the advisory removed, is the affected version
+    still present and reachable in the graph, so an analyst handed a fresh
+    advisory can pivot from it immediately?
+  * **Direct-exposure agreement** -- does the traversal find the dependents
+    that a brute-force scan of every manifest says are directly exposed?
+    Ground truth is computed independently of the traversal, so this is a real
+    check rather than the query grading its own homework.
+
+    Note this scores **depth-1 (direct) exposure only**, not the full
+    transitive closure that `blast_radius` computes. `--transitive` adds a
+    slower multi-hop brute-force check that scores the full closure.
 
 Usage:
     python eval/run_eval.py --cutoff 2025-09-01
+    python eval/run_eval.py --cutoff 2025-09-01 --transitive
+    python eval/run_eval.py --cutoff 2025-09-01 --no-holdout   # score in-graph
 """
 
 from __future__ import annotations
@@ -33,10 +45,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from hydra_blast.config import GRAPH_PATH  # noqa: E402
 from hydra_blast.graph.model import (  # noqa: E402
+    Edge,
+    Entity,
     Graph,
     NS_ADVISORY,
     P_AFFECTS,
     P_DEPENDS_ON,
+    adv_id,
     pkg_id,
     satisfies,
     ver_id,
@@ -84,6 +99,85 @@ def brute_force_exposed(graph: Graph, package: str, version: str) -> set[str]:
     return exposed
 
 
+def rebuild_without(graph: Graph, held_out_ids: set[str]) -> Graph:
+    """Rebuild the graph with the held-out advisories' knowledge removed.
+
+    Drops the Advisory entities and their `affects` edges, and nothing else.
+    Version nodes, dependency edges and maintainer edges are all preserved --
+    see the module docstring on why removing the compromised version itself
+    would test the wrong thing.
+    """
+    held_nodes = {adv_id(osv_id) for osv_id in held_out_ids}
+    rebuilt = Graph()
+
+    for entity in graph.entities.values():
+        if entity.entity_id in held_nodes:
+            continue
+        rebuilt.add_entity(
+            Entity(
+                entity_id=entity.entity_id,
+                name=entity.name,
+                namespace=entity.namespace,
+                attrs=dict(entity.attrs),
+            )
+        )
+
+    for edge in graph.edges:
+        if edge.source in held_nodes or edge.target in held_nodes:
+            continue
+        rebuilt.add_edge(
+            Edge(
+                source=edge.source,
+                target=edge.target,
+                predicate=edge.predicate,
+                declared_range=edge.declared_range,
+                valid_from=edge.valid_from,
+                valid_to=edge.valid_to,
+                context=edge.context,
+            )
+        )
+    return rebuilt
+
+
+def brute_force_transitive(graph: Graph, package: str, version: str, max_depth: int = 10) -> set[str]:
+    """Full transitive closure by repeated brute-force scan.
+
+    Deliberately naive and slower than `blast_radius`: it rescans every edge at
+    each level rather than using the adjacency index, so agreement between the
+    two is meaningful rather than circular.
+    """
+    exposed_versions: set[str] = set()
+    frontier = {(package, version)}
+    seen = {f"{package}@{version}"}
+
+    for _ in range(max_depth):
+        if not frontier:
+            break
+        next_frontier: set[tuple[str, str]] = set()
+        for pkg, ver in frontier:
+            target = pkg_id(pkg)
+            for edge in graph.edges:
+                if edge.predicate != P_DEPENDS_ON or edge.target != target:
+                    continue
+                if not satisfies(ver, edge.declared_range):
+                    continue
+                entity = graph.entities.get(edge.source)
+                if entity is None:
+                    continue
+                owner = entity.attrs.get("package")
+                owner_version = entity.attrs.get("version")
+                if not owner or not owner_version:
+                    continue
+                key = f"{owner}@{owner_version}"
+                if key in seen:
+                    continue
+                seen.add(key)
+                exposed_versions.add(owner)
+                next_frontier.add((owner, owner_version))
+        frontier = next_frontier
+    return exposed_versions
+
+
 def score(predicted: set, actual: set) -> dict:
     if not predicted and not actual:
         return {"precision": 1.0, "recall": 1.0, "f1": 1.0, "tp": 0, "fp": 0, "fn": 0}
@@ -101,7 +195,14 @@ def score(predicted: set, actual: set) -> dict:
     }
 
 
-def evaluate(graph: Graph, cutoff: str, *, limit: int | None = None) -> dict:
+def evaluate(
+    graph: Graph,
+    cutoff: str,
+    *,
+    limit: int | None = None,
+    holdout: bool = True,
+    transitive: bool = False,
+) -> dict:
     cutoff_dt = parse_ts(cutoff) or datetime(2025, 9, 1, tzinfo=timezone.utc)
 
     held_out = []
@@ -113,18 +214,32 @@ def evaluate(graph: Graph, cutoff: str, *, limit: int | None = None) -> dict:
     if limit:
         held_out = held_out[:limit]
 
-    detection_hits = 0
-    detection_misses = []
-    radius_scores = []
-    latencies = {"blast_radius": [], "live_resolution_window": []}
-    per_advisory = []
-
+    # Capture what each held-out advisory affects BEFORE removing it, since
+    # that mapping is the answer key.
+    answer_key: list[tuple[str, list]] = []
     for advisory in held_out:
         affected = [
             graph.entities[e.target]
             for e in graph.out_edges(advisory.entity_id, P_AFFECTS)
             if e.target in graph.entities
         ]
+        answer_key.append((advisory.name, affected))
+
+    # Rebuild the graph without the held-out advisories' knowledge. The
+    # compromised Version nodes survive; only the advisories and their
+    # `affects` edges are removed.
+    scoring_graph = (
+        rebuild_without(graph, {name for name, _ in answer_key}) if holdout else graph
+    )
+
+    detection_hits = 0
+    detection_misses = []
+    radius_scores = []
+    transitive_scores = []
+    latencies = {"blast_radius": [], "live_resolution_window": []}
+    per_advisory = []
+
+    for advisory, affected in zip(held_out, [a for _, a in answer_key]):
         if not affected:
             detection_misses.append({"advisory": advisory.name, "why": "no affected version in graph"})
             continue
@@ -135,30 +250,24 @@ def evaluate(graph: Graph, cutoff: str, *, limit: int | None = None) -> dict:
             if not package or not version:
                 continue
 
-            # Detection: is the compromised version present and reachable?
-            if ver_id(package, version) in graph.entities:
+            # Detection: with the advisory removed, is the compromised version
+            # still present in the graph so an analyst can pivot from it?
+            if ver_id(package, version) in scoring_graph.entities:
                 detection_hits += 1
             else:
                 detection_misses.append({"advisory": advisory.name, "why": f"{package}@{version} absent"})
                 continue
 
             started = time.perf_counter()
-            result = blast_radius(graph, package, version)
+            result = blast_radius(scoring_graph, package, version)
             latencies["blast_radius"].append((time.perf_counter() - started) * 1000)
 
             predicted_direct = {r["package"] for r in result.rows if r["depth"] == 1}
-            actual_direct = brute_force_exposed(graph, package, version)
+            actual_direct = brute_force_exposed(scoring_graph, package, version)
             scored = score(predicted_direct, actual_direct)
             radius_scores.append(scored)
 
-            window_start = version_entity.attrs.get("published_at")
-            window_end = advisory.attrs.get("published_at")
-            if window_start:
-                started = time.perf_counter()
-                live_resolution_window(graph, package, version, window_start, window_end)
-                latencies["live_resolution_window"].append((time.perf_counter() - started) * 1000)
-
-            per_advisory.append({
+            row = {
                 "advisory": advisory.name,
                 "package": f"{package}@{version}",
                 "exposed_versions": result.meta["exposed_versions"],
@@ -166,7 +275,26 @@ def evaluate(graph: Graph, cutoff: str, *, limit: int | None = None) -> dict:
                 "direct_precision": scored["precision"],
                 "direct_recall": scored["recall"],
                 "latency_ms": round(result.latency_ms, 2),
-            })
+            }
+
+            if transitive:
+                predicted_all = {r["package"] for r in result.rows}
+                actual_all = brute_force_transitive(scoring_graph, package, version)
+                scored_all = score(predicted_all, actual_all)
+                transitive_scores.append(scored_all)
+                row["transitive_precision"] = scored_all["precision"]
+                row["transitive_recall"] = scored_all["recall"]
+
+            window_start = version_entity.attrs.get("published_at")
+            # The advisory is held out, so its publish time is taken from the
+            # answer key rather than from the scoring graph.
+            window_end = advisory.attrs.get("published_at")
+            if window_start:
+                started = time.perf_counter()
+                live_resolution_window(scoring_graph, package, version, window_start, window_end)
+                latencies["live_resolution_window"].append((time.perf_counter() - started) * 1000)
+
+            per_advisory.append(row)
 
     def summarise(values):
         if not values:
@@ -180,12 +308,15 @@ def evaluate(graph: Graph, cutoff: str, *, limit: int | None = None) -> dict:
             "max_ms": round(max(values), 2),
         }
 
-    def mean_of(key):
-        return round(statistics.mean([s[key] for s in radius_scores]), 4) if radius_scores else 0.0
+    def mean_of(scores, key):
+        return round(statistics.mean([s[key] for s in scores]), 4) if scores else 0.0
 
-    return {
+    report = {
         "cutoff": cutoff,
+        "holdout": holdout,
         "held_out_advisories": len(held_out),
+        "graph_edges_scored": len(scoring_graph.edges),
+        "graph_edges_full": len(graph.edges),
         "detection": {
             "hits": detection_hits,
             "misses": len(detection_misses),
@@ -193,15 +324,28 @@ def evaluate(graph: Graph, cutoff: str, *, limit: int | None = None) -> dict:
             if (detection_hits + len(detection_misses)) else 0.0,
             "miss_detail": detection_misses[:10],
         },
-        "blast_radius_direct": {
-            "precision": mean_of("precision"),
-            "recall": mean_of("recall"),
-            "f1": mean_of("f1"),
+        # Named for exactly what it measures: depth-1 exposure only. The full
+        # transitive closure is scored separately under `transitive_exposure`.
+        "direct_exposure": {
+            "precision": mean_of(radius_scores, "precision"),
+            "recall": mean_of(radius_scores, "recall"),
+            "f1": mean_of(radius_scores, "f1"),
             "evaluated": len(radius_scores),
+            "scope": "depth-1 dependents only",
         },
         "latency": {k: summarise(v) for k, v in latencies.items()},
         "per_advisory": per_advisory,
     }
+
+    if transitive:
+        report["transitive_exposure"] = {
+            "precision": mean_of(transitive_scores, "precision"),
+            "recall": mean_of(transitive_scores, "recall"),
+            "f1": mean_of(transitive_scores, "f1"),
+            "evaluated": len(transitive_scores),
+            "scope": "full transitive closure",
+        }
+    return report
 
 
 def main():
@@ -209,6 +353,10 @@ def main():
     parser.add_argument("--graph", type=Path, default=GRAPH_PATH)
     parser.add_argument("--cutoff", default="2025-09-01")
     parser.add_argument("--limit", type=int)
+    parser.add_argument("--no-holdout", action="store_true",
+                        help="score against the full graph instead of removing advisories")
+    parser.add_argument("--transitive", action="store_true",
+                        help="also score the full transitive closure (slower)")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--out", type=Path)
     args = parser.parse_args()
@@ -217,17 +365,27 @@ def main():
         sys.exit(f"no graph at {args.graph}; run `python -m hydra_blast crawl` first")
 
     graph = Graph.load(args.graph)
-    report = evaluate(graph, args.cutoff, limit=args.limit)
+    report = evaluate(graph, args.cutoff, limit=args.limit,
+                      holdout=not args.no_holdout, transitive=args.transitive)
 
     if args.json:
         print(json.dumps(report, indent=2))
     else:
         print(f"\n  eval  cutoff={report['cutoff']}  graph={args.graph.name}")
-        print(f"  held-out advisories: {report['held_out_advisories']}")
+        mode = ("advisories removed from the graph before scoring"
+                if report["holdout"] else "scored in-graph (--no-holdout)")
+        print(f"  held-out advisories: {report['held_out_advisories']}  [{mode}]")
+        print(f"  edges: {report['graph_edges_scored']:,} scored "
+              f"of {report['graph_edges_full']:,} total")
         d = report["detection"]
-        print(f"\n  detection      recall={d['recall']}  hits={d['hits']}  misses={d['misses']}")
-        b = report["blast_radius_direct"]
-        print(f"  blast radius   precision={b['precision']}  recall={b['recall']}  f1={b['f1']}  (n={b['evaluated']})")
+        print(f"\n  detection         recall={d['recall']}  hits={d['hits']}  misses={d['misses']}")
+        b = report["direct_exposure"]
+        print(f"  direct exposure   precision={b['precision']}  recall={b['recall']}  "
+              f"f1={b['f1']}  (n={b['evaluated']}, depth-1 only)")
+        t = report.get("transitive_exposure")
+        if t:
+            print(f"  transitive        precision={t['precision']}  recall={t['recall']}  "
+                  f"f1={t['f1']}  (n={t['evaluated']}, full closure)")
         print("\n  latency:")
         for name, stats in report["latency"].items():
             if stats:

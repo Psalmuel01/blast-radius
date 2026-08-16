@@ -163,20 +163,37 @@ Add `--json` for machine-readable output, `--limit N` to show more rows.
 
 ## Evaluation
 
-`eval/run_eval.py` mirrors how the hackathon says judges will test: hold out
-advisories published after a cutoff, then check whether the system still finds
-the right exposure.
+`eval/run_eval.py` holds out advisories published on or after a cutoff and
+**rebuilds the graph without them** before scoring.
 
-Blast radius is scored against ground truth computed by a **brute-force scan of
-every dependency edge in the graph**, implemented independently of the traversal.
-The traversal is not allowed to grade its own homework.
+**What "held out" means matters.** Only the advisory *knowledge* is removed —
+the Advisory node and its `affects` edges, i.e. the assertion *"this version is
+compromised"*. The compromised Version node and every dependency edge stay,
+because `blast_radius` traverses *from* that version; deleting it would test
+"can you find a package that doesn't exist", which is not the defensive
+question. What is actually tested: **given a version the system was never told
+was bad, does it still resolve the exposure correctly?**
+
+Ground truth is computed by brute-force scans implemented independently of the
+traversal, so the query never grades its own homework — a direct scan for
+depth-1, and a deliberately naive repeated-rescan closure for multi-hop.
 
 ```
-  detection      recall=1.0  hits=28  misses=0
-  blast radius   precision=1.0  recall=1.0  f1=1.0  (n=28)
+$ python eval/run_eval.py --cutoff 2025-09-01 --transitive
+
+  held-out advisories: 3  [advisories removed from the graph before scoring]
+  edges: 1,830 scored of 1,856 total          <- 26 `affects` edges removed
+
+  detection         recall=1.0  hits=26  misses=0
+  direct exposure   precision=1.0  recall=1.0  f1=1.0  (n=26, depth-1 only)
+  transitive        precision=1.0  recall=1.0  f1=1.0  (n=26, full closure)
   latency:
-    blast_radius             p50=0.0ms  p95=6.1ms  max=63.2ms
+    blast_radius             p50=0.0ms  p95=0.01ms  max=0.92ms
 ```
+
+Metrics are named for exactly what they cover: `direct_exposure` is depth-1
+dependents only, `transitive_exposure` is the full closure. `--no-holdout`
+scores against the complete graph if you want the in-graph numbers instead.
 
 ## What was hard, and what it taught
 
