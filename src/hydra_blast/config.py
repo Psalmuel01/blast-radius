@@ -59,6 +59,15 @@ class CrawlConfig:
     top_dependents_hop1: int = 300
     top_dependents_deeper: int = 40
     max_packages: int = 25_000
+    # Versions kept per non-seed package, newest first. Packages average ~27
+    # published versions (debug has 78), and ingesting every historical release
+    # of every dependent is what makes a full 2-hop graph ~27M edges / ~6 GB --
+    # large enough to exhaust the disk. Recent versions are what real lockfiles
+    # resolve to; ancient ones add edges nobody queries.
+    #
+    # Seeds are exempt: the compromised version must always be present, and it
+    # may be an old release.
+    max_versions_per_package: int = 12
     request_timeout: float = 30.0
     max_retries: int = 4
     backoff_base: float = 0.8

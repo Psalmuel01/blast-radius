@@ -57,7 +57,7 @@ class CrawlResult:
         }
 
 
-def _hydrate(record: PackageRecord) -> None:
+def _hydrate(record: PackageRecord, config: CrawlConfig = CRAWL) -> None:
     """Fill a record from the npm packument (versions, deps, maintainers)."""
     # Seeds arrive with no download count (they were never returned as some
     # other package's dependent), and typosquat scoring compares against the
@@ -99,6 +99,29 @@ def _hydrate(record: PackageRecord) -> None:
             "unpublished": True,
         }
 
+    _trim_versions(record, config)
+
+
+def _trim_versions(record: PackageRecord, config: CrawlConfig) -> None:
+    """Keep only the newest N versions of non-seed packages.
+
+    Seeds keep everything: the compromised release is the query subject and can
+    be an old version. Unpublished versions are always kept too -- they are the
+    compromised ones, which is the whole reason they are reconstructed.
+    """
+    limit = config.max_versions_per_package
+    if record.is_seed or limit <= 0 or len(record.versions) <= limit:
+        return
+
+    def sort_key(item):
+        _, meta = item
+        return meta.get("published_at") or ""
+
+    always_keep = {v for v, m in record.versions.items() if m.get("unpublished")}
+    ordered = sorted(record.versions.items(), key=sort_key, reverse=True)
+    kept = {v for v, _ in ordered[:limit]} | always_keep
+    record.versions = {v: m for v, m in record.versions.items() if v in kept}
+
 
 def _fan_out(name: str, limit: int) -> list[tuple[str, int | None]]:
     """Top dependents of `name` as (package, downloads)."""
@@ -134,7 +157,7 @@ def crawl(
 
         for index, record in enumerate(frontier, start=1):
             try:
-                _hydrate(record)
+                _hydrate(record, config)
             except Exception as exc:  # noqa: BLE001 - one bad package must not
                 # abort a multi-hour crawl. The HTTP layer already retries;
                 # anything reaching here is unexpected, so log and continue.

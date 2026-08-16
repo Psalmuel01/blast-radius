@@ -142,6 +142,7 @@ def cmd_crawl(args) -> None:
         top_dependents_hop1=args.top1,
         top_dependents_deeper=args.topn,
         max_packages=args.max_packages,
+        max_versions_per_package=args.max_versions,
     )
     seeds = args.seeds or SEEDS
     print(f"crawling {len(seeds)} seed(s), hops={config.max_hops}, "
@@ -163,6 +164,7 @@ def cmd_crawl(args) -> None:
         "top_dependents_hop1": config.top_dependents_hop1,
         "top_dependents_deeper": config.top_dependents_deeper,
         "max_packages": config.max_packages,
+        "max_versions_per_package": config.max_versions_per_package,
         "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     })
     print("graph:", graph.stats())
@@ -292,6 +294,8 @@ def main(argv=None) -> None:
     p.add_argument("--top1", type=int, default=CRAWL.top_dependents_hop1)
     p.add_argument("--topn", type=int, default=CRAWL.top_dependents_deeper)
     p.add_argument("--max-packages", type=int, default=CRAWL.max_packages)
+    p.add_argument("--max-versions", type=int, default=CRAWL.max_versions_per_package,
+                   help="versions kept per non-seed package (0 = all)")
     p.add_argument("--seeds", nargs="*", help="override the seed list")
     p.add_argument("--force", action="store_true",
                    help="overwrite an existing larger graph")
