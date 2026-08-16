@@ -46,10 +46,23 @@ HydraDB's `graph_payload` ingestion path, which stores caller-defined entities
 and predicates rather than LLM-extracted ones — so `depends_on` means exactly
 what the manifest said, with no extraction confidence to second-guess. Edges keep
 their validity window in `temporal_details`, which is what makes the
-"while it was live" query answerable rather than approximate. Relations are read
-back with `GET /context/relations` and stay queryable alongside the same
-database's semantic recall, so the structural answer and the human-readable
-advisory text live in one system instead of two.
+"while it was live" query answerable rather than approximate.
+
+The payoff is that both halves live in one system. Asking HydraDB a plain
+question — *"which packages depend on debug"* — returns `graph_context.query_paths`
+containing the **exact typed triplets** that were ingested:
+
+```json
+{"source": {"name": "debug", "namespace": "Package"},
+ "relation": {"canonical_predicate": "has_version",
+              "context": "debug has version 3.2.4",
+              "temporal_details": "from 2018-09-11T09:12:30.102Z"}}
+```
+
+That is a semantic entry point resolving into structured graph traversal, with
+the real npm publish timestamp attached — not a bag of similar-looking text
+chunks. The precise answers come from the traversal; HydraDB keeps the structure,
+the timestamps, and the human-readable advisory text queryable together.
 
 ## Install
 
