@@ -115,6 +115,10 @@ HYDRA_DB_DATABASE=hydra_blast_radius
 GITHUB_TOKEN=                  # optional; OSV needs no key
 ```
 
+`.env` is read automatically — no need to `source` it first. Real environment
+variables take precedence, so `HYDRA_DB_DATABASE=other python -m hydra_blast …`
+still overrides the file for a single run.
+
 Create the database in the [HydraDB dashboard](https://dashboard.hydradb.com)
 first, then confirm it is ready — `ready_for_ingestion` must be `true` before
 `sync` will work:

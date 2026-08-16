@@ -75,6 +75,37 @@ HYDRA_BASE_URL = "https://api.hydradb.com"
 HYDRA_API_VERSION = "2"
 
 
+def _load_dotenv(path=REPO_ROOT / ".env") -> None:
+    """Read .env into the environment if it hasn't been exported already.
+
+    A .env file is inert on its own -- the shell has to source it. Requiring
+    `set -a && . ./.env` before every command is an easy thing to forget and
+    surfaces as a confusing "API key is not set" even though the key is right
+    there in the file. Real environment variables always win, so exporting for
+    CI or a one-off override still overrides this.
+    """
+    if not path.exists():
+        return
+    try:
+        content = path.read_text()
+    except OSError:
+        return
+    for line in content.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if key in os.environ:
+            continue  # already set in the real environment: leave it alone
+        value = value.strip().strip('"').strip("'")
+        if value:
+            os.environ[key] = value
+
+
+_load_dotenv()
+
+
 def hydra_api_key() -> str | None:
     return os.environ.get("HYDRA_DB_API_KEY") or None
 
