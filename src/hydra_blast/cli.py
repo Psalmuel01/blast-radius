@@ -14,6 +14,7 @@ import argparse
 import json
 import logging
 import sys
+import time
 from pathlib import Path
 
 from .config import CRAWL, GRAPH_PATH, SEED_ADVISORIES, SEEDS, CrawlConfig
@@ -29,11 +30,40 @@ from .queries.core import (
 from .queries.typosquat import typosquat_candidates
 
 
-def _load_graph(path: Path) -> Graph:
+def _load_graph(path: Path, args=None) -> Graph:
+    """Load the graph the query will traverse.
+
+    With --from-hydra the edges are fetched from HydraDB at query time, so the
+    traversal runs against the store of record rather than a local file. The
+    local JSON is the default because it is faster; see the README on why the
+    cache exists.
+    """
+    if args is not None and getattr(args, "from_hydra", False):
+        from .graph.hydra import HydraClient, HydraError, load_graph_from_hydra
+
+        try:
+            client = HydraClient.from_env()
+            if getattr(args, "database", None):
+                client.database = args.database
+            started = time.perf_counter()
+            graph = load_graph_from_hydra(client, progress=False)
+            elapsed = (time.perf_counter() - started) * 1000
+        except HydraError as exc:
+            sys.exit(str(exc))
+        if not graph.edges:
+            sys.exit(
+                f"HydraDB database '{client.database}' returned no relations.\n"
+                f"  run `python -m hydra_blast sync` first."
+            )
+        print(f"  loaded {len(graph.edges):,} edges from HydraDB "
+              f"'{client.database}' in {elapsed:.0f} ms")
+        return graph
+
     if not path.exists():
         sys.exit(
             f"No graph at {path}. Build one first:\n"
-            f"  python -m hydra_blast crawl --hops 2"
+            f"  python -m hydra_blast crawl --hops 1 --top1 40\n"
+            f"or query HydraDB directly with --from-hydra"
         )
     return Graph.load(path)
 
@@ -125,7 +155,7 @@ def cmd_crawl(args) -> None:
 
 
 def cmd_blast(args) -> None:
-    graph = _load_graph(args.graph)
+    graph = _load_graph(args.graph, args)
     package, version = _split_spec(args.spec)
     if not version:
         sys.exit("blast needs a version: e.g. debug@4.4.2")
@@ -133,13 +163,13 @@ def cmd_blast(args) -> None:
 
 
 def cmd_maintainer(args) -> None:
-    graph = _load_graph(args.graph)
+    graph = _load_graph(args.graph, args)
     package, _ = _split_spec(args.spec)
     _emit(shared_maintainer(graph, package), args.json, args.limit)
 
 
 def cmd_window(args) -> None:
-    graph = _load_graph(args.graph)
+    graph = _load_graph(args.graph, args)
     package, version = _split_spec(args.spec)
     if not version:
         sys.exit("window needs a version: e.g. debug@4.4.2")
@@ -161,13 +191,13 @@ def cmd_window(args) -> None:
 
 
 def cmd_typosquat(args) -> None:
-    graph = _load_graph(args.graph)
+    graph = _load_graph(args.graph, args)
     package, _ = _split_spec(args.spec)
     _emit(typosquat_candidates(graph, package, max_distance=args.distance), args.json, args.limit)
 
 
 def cmd_introduced(args) -> None:
-    graph = _load_graph(args.graph)
+    graph = _load_graph(args.graph, args)
     _emit(version_introduced(graph, args.advisory), args.json, args.limit)
 
 
@@ -209,6 +239,9 @@ def main(argv=None) -> None:
     common.add_argument("--graph", type=Path, default=GRAPH_PATH, help="graph file")
     common.add_argument("--json", action="store_true", help="emit JSON")
     common.add_argument("--limit", type=int, default=20, help="rows to show")
+    common.add_argument("--from-hydra", action="store_true",
+                        help="traverse edges fetched from HydraDB at query time")
+    common.add_argument("--database", help="HydraDB database (default: HYDRA_DB_DATABASE)")
 
     parser = argparse.ArgumentParser(prog="hydra_blast", description=__doc__,
                                      parents=[common],
@@ -255,7 +288,6 @@ def main(argv=None) -> None:
     p = sub.add_parser("sync", help="push the graph into HydraDB", **sub_kwargs)
     p.add_argument("--batch-size", type=int, default=400)
     p.add_argument("--max-batches", type=int)
-    p.add_argument("--database")
     p.add_argument("--wait", action="store_true")
     p.add_argument("--workers", type=int, default=4,
                    help="parallel ingest requests (default 4; 1 = sequential)")

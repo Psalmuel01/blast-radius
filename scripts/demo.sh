@@ -35,6 +35,11 @@ PY
 step "QUERY 1 -- BLAST RADIUS: what did the bad version actually reach?"
 python3 -m hydra_blast blast debug@4.4.2 --limit 8
 
+step "THE SAME QUERY, TRAVERSING EDGES FETCHED FROM HYDRADB"
+echo "  --from-hydra pulls the typed graph back out of HydraDB at query time"
+echo "  and runs the identical traversal over it. Same answer, real round trip."
+python3 -m hydra_blast blast debug@4.4.2 --from-hydra --limit 8
+
 step "QUERY 2 -- SHARED MAINTAINER: what else can that account publish to?"
 python3 -m hydra_blast maintainer chalk --limit 8
 

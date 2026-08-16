@@ -48,6 +48,25 @@ what the manifest said, with no extraction confidence to second-guess. Edges kee
 their validity window in `temporal_details`, which is what makes the
 "while it was live" query answerable rather than approximate.
 
+**HydraDB is in the query path, not just the ingest path.** Every query command
+accepts `--from-hydra`, which fetches the typed graph back out of HydraDB
+(`/context/list` → `/context/relations`) and runs the identical traversal over
+those edges:
+
+```bash
+python -m hydra_blast blast debug@4.4.2 --from-hydra
+#   loaded 1,856 edges from HydraDB 'hydra_blast_radius' in 3847 ms
+#   blast_radius <debug@4.4.2>  1.2 ms
+#   exposed_versions: 50   exposed_packages: 4      <- identical to local
+```
+
+Honest numbers: the round trip costs **~3.8 s to fetch 1,856 edges**, then
+**~1 ms to traverse**, against **~0.7 ms** for the local graph. Fetching
+dominates, so the local JSON stays the default for interactive use and serves
+as a synced query cache — the usual cache-in-front-of-a-source-of-truth
+arrangement. The point is that the traversal is *not* coupled to the local file:
+the same code path runs on edges served by HydraDB and returns the same answer.
+
 The payoff is that both halves live in one system. Asking HydraDB a plain
 question — *"which packages depend on debug"* — returns `graph_context.query_paths`
 containing the **exact typed triplets** that were ingested:
