@@ -104,7 +104,7 @@ the timestamps, and the human-readable advisory text queryable together.
 Python 3.10+, no third-party runtime dependencies.
 
 ```bash
-git clone <repo-url> && cd Hydra
+git clone https://github.com/Psalmuel01/hydra-chain.git && cd hydra-chain
 cp .env.example .env          # add your HydraDB key from https://app.hydradb.com
 ```
 
@@ -224,14 +224,25 @@ so the schema was derived from the validator's own error messages.
 ## Correctness
 
 `satisfies()` decides the entire blast radius, so it is **differentially tested
-against npm's own `semver` package: 221/221 cases agree**, including the
-`^0.0.3` edge case that the comparison caught as a bug. Non-registry specs
+against npm's own `semver` package — 651/651 cases agree**
+([tests/test_semver_differential.py](tests/test_semver_differential.py), which
+installs npm `semver` via node and compares every case). Hand-written tests only
+prove the code matches its author's understanding of semver; this compares it
+against the implementation npm actually ships.
+
+That comparison has caught two real bugs: `^0.0.3` wrongly matching `0.0.4`, and
+an empty range accepting prereleases that npm excludes. Non-registry specs
 (`git:`, `file:`, `workspace:`, `npm:` aliases) return `False` rather than guess.
 
 ```bash
-python3 tests/test_semver.py     # 8 passed
-python3 tests/test_queries.py    # 8 passed
+python3 tests/test_semver.py               # 8 passed
+python3 tests/test_semver_differential.py   # 651/651 vs npm semver (needs node)
+python3 tests/test_queries.py               # 8 passed
+python3 tests/test_typosquat.py             # 7 passed
 ```
+
+The differential test skips cleanly if node is unavailable, and says so rather
+than reporting a pass it did not earn.
 
 Query tests run on synthetic fixtures because real data cannot exercise the
 negative cases — every version in the live incident neighbourhood was published

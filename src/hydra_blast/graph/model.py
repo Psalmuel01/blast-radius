@@ -172,7 +172,10 @@ def satisfies(version: str, range_spec: str | None) -> bool:
         return False
     spec = range_spec.strip()
     if not spec:
-        return True
+        # An empty range means "any version" -- but npm still excludes
+        # prereleases unless the range asks for one, so this cannot short
+        # -circuit before the prerelease check below.
+        return not _is_prerelease(version)
     # Non-registry specs: cannot resolve to a registry version.
     if any(
         spec.startswith(p)
