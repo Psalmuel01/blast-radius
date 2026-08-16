@@ -154,7 +154,10 @@ def cmd_sync(args) -> None:
     client = HydraClient.from_env()
     if args.database:
         client.database = args.database
-    print(f"syncing {len(graph.edges)} edges -> HydraDB database '{client.database}'")
+    # State the destination up front: writing a graph into the wrong database
+    # is silent and annoying to undo.
+    print(f"syncing {len(graph.edges)} edges -> HydraDB database '{client.database}'"
+          f"{' (from --database)' if args.database else ' (from HYDRA_DB_DATABASE)'}")
     summary = sync_graph(graph, client, batch_size=args.batch_size,
                          max_batches=args.max_batches, wait=args.wait,
                          workers=args.workers)

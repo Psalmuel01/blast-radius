@@ -80,6 +80,18 @@ HYDRA_DB_DATABASE=hydra_blast_radius
 GITHUB_TOKEN=                  # optional; OSV needs no key
 ```
 
+Create the database in the [HydraDB dashboard](https://dashboard.hydradb.com)
+first, then confirm it is ready — `ready_for_ingestion` must be `true` before
+`sync` will work:
+
+```bash
+curl -s -H "Authorization: Bearer $HYDRA_DB_API_KEY" -H "API-Version: 2" \
+  "https://api.hydradb.com/databases/status?database=$HYDRA_DB_DATABASE"
+```
+
+`sync` prints its destination database on every run, and `--database` overrides
+the `.env` value for one-off runs.
+
 ## Use
 
 ```bash
