@@ -283,6 +283,7 @@ def load_graph_from_hydra(
     *,
     source_ids: list[str] | None = None,
     limit_per_source: int = 5000,
+    max_sources: int | None = None,
     workers: int = 8,
     progress: bool = True,
 ) -> Graph:
@@ -298,6 +299,16 @@ def load_graph_from_hydra(
     """
     client = client or HydraClient.from_env()
     ids = source_ids or client.list_sources()
+    if max_sources is not None and len(ids) > max_sources:
+        # Reads are per-source and each costs ~2s, so a full graph of thousands
+        # of batches is far too slow to fetch in one go for an interactive
+        # query. Capping keeps --from-hydra usable; see README on the cache.
+        log.warning(
+            "database has %d sources; reading the first %d "
+            "(raise --hydra-sources for a complete read)",
+            len(ids), max_sources,
+        )
+        ids = ids[:max_sources]
     if progress:
         log.info("reading %d source(s) from HydraDB database '%s'", len(ids), client.database)
 

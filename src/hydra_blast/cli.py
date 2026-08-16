@@ -46,7 +46,10 @@ def _load_graph(path: Path, args=None) -> Graph:
             if getattr(args, "database", None):
                 client.database = args.database
             started = time.perf_counter()
-            graph = load_graph_from_hydra(client, progress=False)
+            graph = load_graph_from_hydra(
+                client, progress=False,
+                max_sources=getattr(args, 'hydra_sources', None),
+            )
             elapsed = (time.perf_counter() - started) * 1000
         except HydraError as exc:
             sys.exit(str(exc))
@@ -242,6 +245,8 @@ def main(argv=None) -> None:
     common.add_argument("--from-hydra", action="store_true",
                         help="traverse edges fetched from HydraDB at query time")
     common.add_argument("--database", help="HydraDB database (default: HYDRA_DB_DATABASE)")
+    common.add_argument("--hydra-sources", type=int, default=None,
+                        help="cap sources read with --from-hydra (reads cost ~2s each)")
 
     parser = argparse.ArgumentParser(prog="hydra_blast", description=__doc__,
                                      parents=[common],

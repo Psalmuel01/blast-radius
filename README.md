@@ -60,12 +60,28 @@ python -m hydra_blast blast debug@4.4.2 --from-hydra
 #   exposed_versions: 50   exposed_packages: 4      <- identical to local
 ```
 
-Honest numbers: the round trip costs **~3.8 s to fetch 1,856 edges**, then
-**~1 ms to traverse**, against **~0.7 ms** for the local graph. Fetching
-dominates, so the local JSON stays the default for interactive use and serves
-as a synced query cache — the usual cache-in-front-of-a-source-of-truth
-arrangement. The point is that the traversal is *not* coupled to the local file:
-the same code path runs on edges served by HydraDB and returns the same answer.
+All five queries were checked for parity, not just this one — `blast_radius`,
+`shared_maintainer`, `live_resolution_window`, `version_introduced` and
+`typosquat_candidates` return identical rows from either source, including the
+full 74-minute window (`13:12:39Z → 14:26:51Z`) and `4.4.2 → 4.4.3`.
+
+**The division of labour:** HydraDB is the durable, temporally-versioned store
+of record — the graph lives there, with its typed entities, predicates and
+validity windows. The local JSON is a *synced query cache* in front of it, the
+same arrangement as an edge cache over a source of truth, and it exists for
+interactive latency. The round trip costs **~3.8 s to fetch 1,856 edges** then
+**~1 ms to traverse**, versus **~0.7 ms** from cache. Fetching dominates, which
+is exactly why the cache exists — not a defect of the store.
+
+**Known constraint at scale.** Relation reads are per-source and each costs
+~2 s for a ~650 KB response. Response size stays flat as the graph grows (reads
+are per-batch, not whole-graph), so there is no size cliff — but the *number* of
+sources grows linearly, and a full 2-hop graph (~12.6k packages) would be
+~9.7k sources: roughly 40 minutes to read even at 8 workers. `--from-hydra`
+therefore takes `--hydra-sources N` to bound the read, and warns when it
+truncates. Paging cannot help here: `cursor` returns an empty page for any
+value and `next_cursor` is always null, so a single large-limit request per
+source is the only complete read.
 
 The payoff is that both halves live in one system. Asking HydraDB a plain
 question — *"which packages depend on debug"* — returns `graph_context.query_paths`
