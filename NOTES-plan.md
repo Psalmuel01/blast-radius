@@ -60,9 +60,16 @@ temporal edges are HydraDB's advertised differentiator (§5).
 
 ## Verified-real demo spine
 `debug@4.4.2` published `13:12:39.973Z`, advisory `14:26:51Z` → **74-minute live
-window** on 2025-09-08. Compromised maintainer `qix` also maintains `chalk` et al.,
-so blast radius / shared maintainer / live window all have true answers to score
-against.
+window** on 2025-09-08.
+
+Shared-maintainer ground truth, verified against the registry (2026-08-16):
+`qix` — the phished account — maintains **7** of the 17 seeds (`debug`,
+`color-convert`, `error-ex`, `is-arrayish`, `simple-swizzle`, `backslash`,
+`color-string`), and `sindresorhus` maintains **10** (`chalk`, `ansi-styles`,
+`strip-ansi`, `supports-color`, `error-ex`, `ansi-regex`, `slice-ansi`,
+`has-ansi`, `wrap-ansi`, `chalk-template`). `qix` does **not** maintain `chalk`.
+So blast radius / shared maintainer / live window all have true answers to
+score against.
 
 ## Open risk
 `graph_payload` schema is undocumented and **unverified without an API key** — the

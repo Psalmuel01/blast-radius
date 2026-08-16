@@ -265,6 +265,11 @@ def evaluate(
             predicted_direct = {r["package"] for r in result.rows if r["depth"] == 1}
             actual_direct = brute_force_exposed(scoring_graph, package, version)
             scored = score(predicted_direct, actual_direct)
+            # An advisory with no dependents in the crawled subgraph scores a
+            # trivial 1.0/1.0 -- empty predicted correctly matches empty actual.
+            # That is a real result but not a real *detection*, so track the two
+            # populations separately rather than averaging them together.
+            scored["nontrivial"] = bool(actual_direct)
             radius_scores.append(scored)
 
             row = {
@@ -281,6 +286,7 @@ def evaluate(
                 predicted_all = {r["package"] for r in result.rows}
                 actual_all = brute_force_transitive(scoring_graph, package, version)
                 scored_all = score(predicted_all, actual_all)
+                scored_all["nontrivial"] = bool(actual_all)
                 transitive_scores.append(scored_all)
                 row["transitive_precision"] = scored_all["precision"]
                 row["transitive_recall"] = scored_all["recall"]
@@ -308,6 +314,9 @@ def evaluate(
             "max_ms": round(max(values), 2),
         }
 
+    nontrivial = [s for s in radius_scores if s.get('nontrivial')]
+    nontrivial_transitive = [s for s in transitive_scores if s.get('nontrivial')]
+
     def mean_of(scores, key):
         return round(statistics.mean([s[key] for s in scores]), 4) if scores else 0.0
 
@@ -332,6 +341,15 @@ def evaluate(
             "f1": mean_of(radius_scores, "f1"),
             "evaluated": len(radius_scores),
             "scope": "depth-1 dependents only",
+            # How much of that average is a real detection test. An advisory
+            # with no dependents in scope scores 1.0/1.0 for correctly finding
+            # nothing, which is true but trivial -- averaging it with genuine
+            # detections inflates the headline number.
+            "with_real_exposure": len(nontrivial),
+            "with_zero_exposure": len(radius_scores) - len(nontrivial),
+            "precision_real_only": mean_of(nontrivial, "precision"),
+            "recall_real_only": mean_of(nontrivial, "recall"),
+            "f1_real_only": mean_of(nontrivial, "f1"),
         },
         "latency": {k: summarise(v) for k, v in latencies.items()},
         "per_advisory": per_advisory,
@@ -344,6 +362,10 @@ def evaluate(
             "f1": mean_of(transitive_scores, "f1"),
             "evaluated": len(transitive_scores),
             "scope": "full transitive closure",
+            "with_real_exposure": len(nontrivial_transitive),
+            "with_zero_exposure": len(transitive_scores) - len(nontrivial_transitive),
+            "precision_real_only": mean_of(nontrivial_transitive, "precision"),
+            "recall_real_only": mean_of(nontrivial_transitive, "recall"),
         }
     return report
 
@@ -382,10 +404,18 @@ def main():
         b = report["direct_exposure"]
         print(f"  direct exposure   precision={b['precision']}  recall={b['recall']}  "
               f"f1={b['f1']}  (n={b['evaluated']}, depth-1 only)")
+        print(f"    of which {b['with_real_exposure']} advisor"
+              f"{'y has' if b['with_real_exposure'] == 1 else 'ies have'} real exposure "
+              f"to detect (precision={b['precision_real_only']} "
+              f"recall={b['recall_real_only']}),")
+        print(f"    and {b['with_zero_exposure']} have no dependents in this graph "
+              f"-- correctly reported as zero, but a trivial pass.")
         t = report.get("transitive_exposure")
         if t:
             print(f"  transitive        precision={t['precision']}  recall={t['recall']}  "
                   f"f1={t['f1']}  (n={t['evaluated']}, full closure)")
+            print(f"    of which {t['with_real_exposure']} with real exposure "
+                  f"(precision={t['precision_real_only']} recall={t['recall_real_only']})")
         print("\n  latency:")
         for name, stats in report["latency"].items():
             if stats:

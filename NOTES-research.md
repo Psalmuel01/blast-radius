@@ -89,3 +89,11 @@ downloads + recent registration + name-similarity.
 - npm per-package metadata carries `maintainers` (`debug` → `qix`, `tootallnate`),
   covering the shared-maintainer query. `qix` is the phished account, so the
   shared-maintainer query has a real, meaningful answer here.
+- Measured against the registry on 2026-08-16, across the 17 seeds:
+  `qix` maintains **7** (`debug`, `color-convert`, `error-ex`, `is-arrayish`,
+  `simple-swizzle`, `backslash`, `color-string`); `sindresorhus` maintains
+  **10** (`chalk`, `ansi-styles`, `strip-ansi`, `supports-color`, `error-ex`,
+  `ansi-regex`, `slice-ansi`, `has-ansi`, `wrap-ansi`, `chalk-template`).
+  **`qix` does not maintain `chalk`** — an earlier note here implied it did.
+  These are current values: npm has edited maintainer lists since the incident,
+  so this reflects the registry today, not the state at attack time.

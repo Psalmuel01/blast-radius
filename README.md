@@ -252,6 +252,25 @@ Query tests run on synthetic fixtures because real data cannot exercise the
 negative cases — every version in the live incident neighbourhood was published
 years before the compromise, so the window filter never has to exclude anything.
 
+**An empty answer must never be indistinguishable from a real negative.** A
+scoped-down test crawl once sat in `data/graph.json`, and querying `chalk`
+against it returned `0 related packages` — which reads exactly like "chalk has
+no shared maintainers", a wrong and confident answer. Nothing was broken; the
+package had simply never been crawled.
+
+Two guards, because for a security tool a silently-empty result is worse than an
+error:
+
+- every graph records its **provenance** (seeds, hops, caps, build time)
+- package-scoped queries **refuse to answer** for a package that is not in the
+  graph, and say what the graph was built from
+
+```
+$ python -m hydra_blast maintainer chalk
+'chalk' is not in this graph, so any result would be empty and misleading.
+  graph: 508 entities, built from 1 seed(s) [debug], hops=0, max_packages=6
+```
+
 ## Attribution
 
 - **[OSV.dev](https://osv.dev)** — vulnerability ground truth (Google, open data)
