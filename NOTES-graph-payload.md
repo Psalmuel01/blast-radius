@@ -80,6 +80,30 @@ trust `properties`/`metadata` (silently lost) or `timestamp` (rewritten). The
 local graph stays the source of truth for exact times; HydraDB carries the
 traversable structure plus these two string attributes.
 
+## Entity names are normalised on ingest (not just lower-cased)
+
+HydraDB rewrites entity names, and not reversibly. Two distinct behaviours,
+both found by round-tripping a 490k-edge graph and comparing edge-by-edge:
+
+1. **Lower-casing.** `MAL-2025-46974` reads back as `mal-2025-46974`. Handled by
+   upper-casing advisory ids on read.
+2. **Separator stripping / entity resolution.** The seed package **`ansi-styles`
+   reads back as `ansistyles`** — which is a *different real npm package*. It is
+   not applied uniformly: `strip-ansi`, `wrap-ansi`, `ansi-regex` and
+   `supports-color` all keep their hyphens in the same database.
+
+The second is the dangerous one for this project: a compromised seed package is
+silently renamed to a different real package, so every edge touching it resolves
+to the wrong entity id on read and looks *missing*. Measured effect on a
+490,030-edge graph: **483,519 edges read back (−6,511, 1.3%)**, and
+`blast_radius(debug@4.4.2)` returned 1,350 versions from HydraDB versus 1,378
+locally.
+
+**Implication:** entity *names* cannot be used as join keys across the HydraDB
+round trip. The local graph stays authoritative for identity; HydraDB round
+trips are verified with the name-normalisation accounted for, and any parity
+claim has to be re-measured at scale rather than assumed from a small sample.
+
 ## Gotchas that cost time
 1. `entities` as a list → outer "invalid graph_payload JSON" error that points at
    the *whole* payload, not the offending field. Misleading; it must be a map.
