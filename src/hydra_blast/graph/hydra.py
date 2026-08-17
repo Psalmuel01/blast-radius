@@ -48,6 +48,20 @@ class HydraError(RuntimeError):
     pass
 
 
+_RETRY_AFTER_RE = re.compile(r"retry in (\d+(?:\.\d+)?) second")
+
+
+def _retry_after_seconds(message: str, attempt: int) -> float:
+    """Delay from a 429 body, else exponential backoff. Capped."""
+    match = _RETRY_AFTER_RE.search(message or "")
+    if match:
+        try:
+            return min(float(match.group(1)) + 0.5, 30.0)
+        except ValueError:
+            pass
+    return min(1.0 * (2 ** attempt), 30.0)
+
+
 @dataclass
 class HydraClient:
     api_key: str
@@ -93,7 +107,7 @@ class HydraClient:
                     time.sleep(0.5 * (2 ** attempt))
         raise HydraError(f"GET {path} failed: {last}")
 
-    def _post_multipart(self, path: str, fields: dict[str, str]) -> dict:
+    def _post_multipart(self, path: str, fields: dict[str, str], *, retries: int = 5) -> dict:
         boundary = uuid.uuid4().hex
         parts = [
             f'--{boundary}\r\nContent-Disposition: form-data; name="{key}"\r\n\r\n{value}\r\n'
@@ -102,17 +116,34 @@ class HydraClient:
         body = ("".join(parts) + f"--{boundary}--\r\n").encode()
         headers = self._headers()
         headers["Content-Type"] = f"multipart/form-data; boundary={boundary}"
-        request = urllib.request.Request(self.base_url + path, data=body, headers=headers)
-        try:
-            with urllib.request.urlopen(request, timeout=180) as response:
-                return json.loads(response.read().decode())
-        except urllib.error.HTTPError as exc:
-            detail = (exc.read() or b"").decode()
+        # Ingestion is rate limited (120 rpm) and long syncs also hit transient
+        # SSL/connection errors. Without retries an 8% batch-failure rate leaves
+        # the stored graph silently incomplete, so retry both cases here.
+        last: Exception | None = None
+        for attempt in range(retries):
+            request = urllib.request.Request(self.base_url + path, data=body, headers=headers)
             try:
-                message = json.loads(detail)["error"]["message"]
-            except Exception:
-                message = detail[:300]
-            raise HydraError(f"HTTP {exc.code}: {message}") from exc
+                with urllib.request.urlopen(request, timeout=180) as response:
+                    return json.loads(response.read().decode())
+            except urllib.error.HTTPError as exc:
+                detail = (exc.read() or b"").decode()
+                try:
+                    message = json.loads(detail)["error"]["message"]
+                except Exception:
+                    message = detail[:300]
+                if exc.code == 429 and attempt < retries - 1:
+                    # The response states how long to wait; honour it, with a
+                    # little headroom, rather than hammering the limit.
+                    time.sleep(_retry_after_seconds(message, attempt))
+                    last = exc
+                    continue
+                raise HydraError(f"HTTP {exc.code}: {message}") from exc
+            except (http.client.IncompleteRead, urllib.error.URLError,
+                    TimeoutError, json.JSONDecodeError, OSError) as exc:
+                last = exc
+                if attempt < retries - 1:
+                    time.sleep(1.0 * (2 ** attempt))
+        raise HydraError(f"POST {path} failed after {retries} attempts: {last}")
 
     # -- ingestion ---------------------------------------------------------
 
@@ -299,16 +330,23 @@ def load_graph_from_hydra(
     """
     client = client or HydraClient.from_env()
     ids = source_ids or client.list_sources()
+    truncated = False
     if max_sources is not None and len(ids) > max_sources:
         # Reads are per-source and each costs ~2s, so a full graph of thousands
         # of batches is far too slow to fetch in one go for an interactive
         # query. Capping keeps --from-hydra usable; see README on the cache.
+        #
+        # This is a genuinely partial graph: at 1,226 sources, reading 8 of them
+        # picks up ~2 of the 720 batches holding `debug` dependency edges. A
+        # query over that would return a confidently wrong answer, so the
+        # partial-ness is recorded on the graph rather than only logged.
         log.warning(
-            "database has %d sources; reading the first %d "
-            "(raise --hydra-sources for a complete read)",
+            "database has %d sources; reading only %d -- the result will be "
+            "PARTIAL and queries over it are not comparable to the full graph",
             len(ids), max_sources,
         )
         ids = ids[:max_sources]
+        truncated = True
     if progress:
         log.info("reading %d source(s) from HydraDB database '%s'", len(ids), client.database)
 
@@ -373,6 +411,13 @@ def load_graph_from_hydra(
                     context=context or None,
                 )
             )
+
+    graph.provenance = {
+        "source": "hydradb",
+        "database": client.database,
+        "sources_read": len(ids),
+        "partial_read": truncated,
+    }
 
     # HydraDB stores entity name/namespace but not our free-form attrs, so the
     # timestamps the queries need are recovered from the edges that carry them:

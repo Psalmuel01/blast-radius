@@ -59,8 +59,18 @@ def _load_graph(path: Path, args=None) -> Graph:
                 f"HydraDB database '{client.database}' returned no relations.\n"
                 f"  run `python -m hydra_blast sync` first."
             )
+        if graph.provenance.get("partial_read") and not getattr(args, "allow_partial", False):
+            sys.exit(
+                f"refusing to answer from a PARTIAL HydraDB read.\n"
+                f"  read {graph.provenance.get('sources_read')} source(s), "
+                f"giving {len(graph.edges):,} edges -- a fraction of the graph.\n"
+                f"  a query over this returns a confidently wrong answer, so:\n"
+                f"    drop --hydra-sources for a complete read, or\n"
+                f"    pass --allow-partial if you really want the subset."
+            )
         print(f"  loaded {len(graph.edges):,} edges from HydraDB "
-              f"'{client.database}' in {elapsed:.0f} ms")
+              f"'{client.database}' in {elapsed:.0f} ms"
+              + ("  [PARTIAL]" if graph.provenance.get("partial_read") else ""))
         return graph
 
     if not path.exists():
@@ -282,6 +292,8 @@ def main(argv=None) -> None:
     common.add_argument("--database", help="HydraDB database (default: HYDRA_DB_DATABASE)")
     common.add_argument("--hydra-sources", type=int, default=None,
                         help="cap sources read with --from-hydra (reads cost ~2s each)")
+    common.add_argument("--allow-partial", action="store_true",
+                        help="permit querying an intentionally partial HydraDB read")
 
     parser = argparse.ArgumentParser(prog="hydra_blast", description=__doc__,
                                      parents=[common],

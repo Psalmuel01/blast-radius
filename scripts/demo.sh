@@ -40,10 +40,24 @@ echo "  HydraDB is the temporally-versioned store of record; the local graph is"
 echo "  a synced cache in front of it for interactive speed. --from-hydra skips"
 echo "  the cache and traverses edges served by HydraDB itself."
 echo
-echo "  Bounded to ${HYDRA_DEMO_SOURCES:-8} sources: relation reads cost ~2s each, so an"
-echo "  unbounded read of a large graph would take far too long to show live."
-python3 -m hydra_blast blast debug@4.4.2 --from-hydra \
-  --hydra-sources "${HYDRA_DEMO_SOURCES:-8}" --limit 8
+echo "  Relation reads are per-source, so reading all 1,226 sources is a"
+echo "  multi-minute operation -- too slow to sit through live, and showing a"
+echo "  deliberately partial read would be the exact failure this tool exists to"
+echo "  prevent. So: the full read was run once, separately, and the confirmed"
+echo "  result is shown here."
+echo
+if [ -f "$HYDRA_PARITY_CAPTURE" ]; then
+  cat "$HYDRA_PARITY_CAPTURE"
+else
+  cat docs/hydra-parity.txt 2>/dev/null || echo "  (run scripts/capture_parity.sh first)"
+fi
+echo
+echo "  Byte-identical to the local traversal. The command, to run yourself:"
+echo "    python3 -m hydra_blast blast debug@4.4.2 --from-hydra"
+echo
+echo "  A bounded read is refused rather than answered, because a partial graph"
+echo "  produces a confidently wrong blast radius:"
+python3 -m hydra_blast blast debug@4.4.2 --from-hydra --hydra-sources 8 2>&1 | head -5 || true
 
 step "QUERY 2 -- SHARED MAINTAINER: what else can that account publish to?"
 python3 -m hydra_blast maintainer chalk --limit 8

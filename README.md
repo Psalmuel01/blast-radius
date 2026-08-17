@@ -14,10 +14,10 @@ was phished.
 $ python -m hydra_blast blast debug@4.4.2
 
   blast_radius  <debug@4.4.2>
-  63.2 ms
-    exposed_versions: 482
-    exposed_packages: 14
-    max_depth_reached: 2
+  29.6 ms
+    exposed_versions: 1378
+    exposed_packages: 237
+    max_depth_reached: 3
 ```
 
 ## Why a graph, and why HydraDB
@@ -55,33 +55,44 @@ those edges:
 
 ```bash
 python -m hydra_blast blast debug@4.4.2 --from-hydra
-#   loaded 1,856 edges from HydraDB 'hydra_blast_radius' in 3847 ms
-#   blast_radius <debug@4.4.2>  1.2 ms
-#   exposed_versions: 50   exposed_packages: 4      <- identical to local
+#   read 1,226 sources, loaded 490,030 edges from HydraDB 'hydra_blast_radius'
+#   blast_radius <debug@4.4.2>
+#   exposed_versions: 1378   exposed_packages: 237   <- identical to local
 ```
 
-All five queries were checked for parity, not just this one — `blast_radius`,
+All five queries are checked for parity, not just this one — `blast_radius`,
 `shared_maintainer`, `live_resolution_window`, `version_introduced` and
 `typosquat_candidates` return identical rows from either source, including the
 full 74-minute window (`13:12:39Z → 14:26:51Z`) and `4.4.2 → 4.4.3`.
+`scripts/capture_parity.sh` re-runs that check end to end.
 
 **The division of labour:** HydraDB is the durable, temporally-versioned store
 of record — the graph lives there, with its typed entities, predicates and
 validity windows. The local JSON is a *synced query cache* in front of it, the
 same arrangement as an edge cache over a source of truth, and it exists for
-interactive latency. The round trip costs **~3.8 s to fetch 1,856 edges** then
-**~1 ms to traverse**, versus **~0.7 ms** from cache. Fetching dominates, which
-is exactly why the cache exists — not a defect of the store.
+interactive latency. Traversal itself is ~30 ms either way; what differs is
+getting the edges in front of it.
 
-**Known constraint at scale.** Relation reads are per-source and each costs
-~2 s for a ~650 KB response. Response size stays flat as the graph grows (reads
-are per-batch, not whole-graph), so there is no size cliff — but the *number* of
-sources grows linearly, and a full 2-hop graph (~12.6k packages) would be
-~9.7k sources: roughly 40 minutes to read even at 8 workers. `--from-hydra`
-therefore takes `--hydra-sources N` to bound the read, and warns when it
-truncates. Paging cannot help here: `cursor` returns an empty page for any
-value and `next_cursor` is always null, so a single large-limit request per
+**Known constraint at scale.** Relation reads are per-source and measured at
+**~6 s each**, so the full 1,226-source read takes **~15 minutes at 8 workers**
+(~2 hours sequential). Response size stays flat as the graph grows — reads are
+per-batch, not whole-graph — so there is no size cliff, but the *number* of
+sources grows linearly. Paging cannot help: `cursor` returns an empty page for
+any value and `next_cursor` is always null, so one large-limit request per
 source is the only complete read.
+
+`--hydra-sources N` bounds the read, but a bounded read is **refused by
+default** rather than answered. At 1,226 sources, reading 8 of them fetches
+~2 of the 720 batches holding `debug` dependency edges — 792 edges out of
+490,030, which would look like a complete answer and be badly wrong:
+
+```
+$ python -m hydra_blast blast debug@4.4.2 --from-hydra --hydra-sources 8
+refusing to answer from a PARTIAL HydraDB read.
+  read 8 source(s), giving 792 edges -- a fraction of the graph.
+  drop --hydra-sources for a complete read, or
+  pass --allow-partial if you really want the subset.
+```
 
 The payoff is that both halves live in one system. Asking HydraDB a plain
 question — *"which packages depend on debug"* — returns `graph_context.query_paths`
@@ -220,6 +231,10 @@ direct dependents; five seeds have 183,768 between them. An unbounded 2–3 hop
 crawl reaches millions of packages. The crawl instead keeps the top-K dependents
 *by download count* at each hop — a defensible cut, since that is where a real
 compromise does the most damage, and one config constant to widen.
+
+**What the shipped graph actually covers.** 1,142 packages / 490,030 edges,
+crawled to **hop 1**, which already yields **depth-3** transitive exposure
+(237 packages reachable from `debug@4.4.2`).
 
 Reverse-engineering HydraDB's explicit-graph ingestion is documented in
 [NOTES-graph-payload.md](NOTES-graph-payload.md) — the parameter is undocumented,
