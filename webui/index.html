@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blast Radius — supply-chain exposure</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --line: #30363d;
+    --text: #e6edf3; --dim: #8b949e; --accent: #58a6ff;
+    --bad: #f85149; --ok: #3fb950; --warn: #d29922;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  header {
+    padding: 20px 24px; border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  h1 { margin: 0 0 4px; font-size: 18px; letter-spacing: -0.01em; }
+  .sub { color: var(--dim); font-size: 13px; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 20px 24px 60px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; padding: 16px; margin-bottom: 16px;
+  }
+  label { display: block; font-size: 12px; color: var(--dim); margin-bottom: 4px; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+  .field { flex: 1 1 200px; min-width: 160px; }
+  select, input {
+    width: 100%; padding: 8px 10px; background: var(--bg); color: var(--text);
+    border: 1px solid var(--line); border-radius: 6px; font: inherit;
+  }
+  input { font-family: var(--mono); }
+  .btns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+  button {
+    padding: 8px 14px; border-radius: 6px; border: 1px solid var(--line);
+    background: #21262d; color: var(--text); font: inherit; cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  button.primary { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+  button.primary:hover:not(:disabled) { background: #388bfd; color: #fff; }
+  .meta { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 12px; }
+  .stat { font-family: var(--mono); }
+  .stat b { display: block; font-size: 20px; color: var(--accent); }
+  .stat span { font-size: 11px; color: var(--dim); text-transform: uppercase; }
+  table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 12.5px; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+  th { color: var(--dim); font-weight: 500; position: sticky; top: 0; background: var(--panel); }
+  tbody tr:hover { background: #1c2128; }
+  .scroll { max-height: 460px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; }
+  .depth { display: inline-block; min-width: 18px; text-align: center;
+           border-radius: 4px; padding: 0 5px; font-size: 11px; }
+  .d1 { background: #4a1d1d; color: #ff9c95; }
+  .d2 { background: #4a331d; color: #ffcc80; }
+  .d3 { background: #1d3a4a; color: #90d0ff; }
+  .err { color: var(--bad); font-family: var(--mono); white-space: pre-wrap; }
+  .note { color: var(--dim); font-size: 12px; margin-top: 10px; }
+  .pill { font-family: var(--mono); font-size: 11px; color: var(--dim);
+          border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Blast Radius <span class="pill" id="graphPill">loading…</span></h1>
+  <div class="sub">
+    Supply-chain exposure as a graph traversal. Read-only view over the local
+    graph — the same queries the CLI runs.
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="card">
+    <div class="row">
+      <div class="field">
+        <label for="pkg">Compromised package</label>
+        <select id="pkg"></select>
+      </div>
+      <div class="field">
+        <label for="ver">Version</label>
+        <input id="ver" placeholder="4.4.2" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="adv">Advisory (for window / introduced)</label>
+        <input id="adv" placeholder="MAL-2025-46974" autocomplete="off">
+      </div>
+    </div>
+    <div class="btns">
+      <button class="primary" data-kind="blast">Blast radius</button>
+      <button data-kind="maintainer">Shared maintainer</button>
+      <button data-kind="window">Live window</button>
+      <button data-kind="typosquat">Typosquats</button>
+      <button data-kind="introduced">Version introduced</button>
+    </div>
+    <div class="note" id="provenance"></div>
+  </div>
+
+  <div class="card" id="resultCard" style="display:none">
+    <div class="meta" id="meta"></div>
+    <div class="scroll"><table>
+      <thead id="thead"></thead><tbody id="tbody"></tbody>
+    </table></div>
+    <div class="note" id="truncated"></div>
+  </div>
+
+  <div class="card err" id="errorCard" style="display:none"></div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let SEEDS = [];
+
+async function loadMeta() {
+  try {
+    const res = await fetch("/api/meta");
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    SEEDS = data.seeds || [];
+    const s = data.stats || {};
+    $("graphPill").textContent =
+      `${(s.entities || 0).toLocaleString()} entities · ${(s.edges || 0).toLocaleString()} edges`;
+    $("provenance").textContent = "Graph built from " + (data.provenance || "unknown");
+    const sel = $("pkg");
+    sel.innerHTML = "";
+    SEEDS.forEach((seed) => {
+      const opt = document.createElement("option");
+      opt.value = seed.package;
+      opt.textContent = seed.package + (seed.version ? ` @ ${seed.version}` : "");
+      sel.appendChild(opt);
+    });
+    syncFields();
+  } catch (err) {
+    showError("Could not load graph metadata:\n" + err.message);
+  }
+}
+
+// Prefill the version and advisory that belong to the selected seed, so the
+// default state is always a query that actually returns something.
+function syncFields() {
+  const seed = SEEDS.find((s) => s.package === $("pkg").value);
+  if (!seed) return;
+  if (seed.version) $("ver").value = seed.version;
+  if (seed.advisory) $("adv").value = seed.advisory;
+}
+
+function showError(message) {
+  $("errorCard").style.display = "block";
+  $("errorCard").textContent = message;
+  $("resultCard").style.display = "none";
+}
+
+function depthCell(value) {
+  if (value === undefined || value === null) return "";
+  const cls = value <= 1 ? "d1" : value === 2 ? "d2" : "d3";
+  return `<span class="depth ${cls}">${value}</span>`;
+}
+
+const COLUMNS = [
+  "package", "version", "depth", "declared_range", "reason",
+  "shared_maintainers", "score", "edit_distance", "pattern",
+  "introduced_in", "likely_patched_in", "downloads",
+];
+
+function render(data) {
+  $("errorCard").style.display = "none";
+  $("resultCard").style.display = "block";
+
+  const stats = [
+    ["rows", data.total_rows],
+    ["latency", data.latency_ms + " ms"],
+  ];
+  for (const [k, v] of Object.entries(data.meta || {})) {
+    if (typeof v === "object") continue;
+    stats.push([k.replace(/_/g, " "), v]);
+  }
+  $("meta").innerHTML = stats
+    .map(([k, v]) => `<div class="stat"><b>${v}</b><span>${k}</span></div>`)
+    .join("");
+
+  const rows = data.rows || [];
+  if (!rows.length) {
+    $("thead").innerHTML = "";
+    $("tbody").innerHTML =
+      `<tr><td style="color:var(--dim)">No results — this is a real answer, not an error.</td></tr>`;
+    $("truncated").textContent = "";
+    return;
+  }
+
+  const cols = COLUMNS.filter((c) => rows.some((r) => r[c] !== undefined && r[c] !== null && r[c] !== ""));
+  $("thead").innerHTML = "<tr>" + cols.map((c) => `<th>${c.replace(/_/g, " ")}</th>`).join("") + "</tr>";
+  $("tbody").innerHTML = rows.map((row) =>
+    "<tr>" + cols.map((c) => {
+      if (c === "depth") return `<td>${depthCell(row[c])}</td>`;
+      let v = row[c];
+      if (Array.isArray(v)) v = v.join(", ");
+      if (v === undefined || v === null) v = "";
+      return `<td>${String(v).replace(/[<>&]/g, (ch) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[ch]))}</td>`;
+    }).join("") + "</tr>"
+  ).join("");
+
+  $("truncated").textContent = data.total_rows > rows.length
+    ? `Showing ${rows.length} of ${data.total_rows} rows.`
+    : "";
+}
+
+async function runQuery(kind) {
+  const params = new URLSearchParams({
+    kind,
+    package: $("pkg").value,
+    version: $("ver").value,
+    advisory: $("adv").value,
+  });
+  document.querySelectorAll("button[data-kind]").forEach((b) => (b.disabled = true));
+  try {
+    const res = await fetch("/api/query?" + params.toString());
+    const data = await res.json();
+    if (data.error) showError(data.error);
+    else render(data);
+  } catch (err) {
+    showError("Request failed: " + err.message);
+  } finally {
+    document.querySelectorAll("button[data-kind]").forEach((b) => (b.disabled = false));
+  }
+}
+
+document.querySelectorAll("button[data-kind]").forEach((btn) =>
+  btn.addEventListener("click", () => runQuery(btn.dataset.kind))
+);
+$("pkg").addEventListener("change", syncFields);
+loadMeta();
+</script>
+</body>
+</html>
