@@ -97,9 +97,9 @@ same arrangement as an edge cache over a source of truth, and it exists for
 interactive latency. Traversal itself is ~30 ms either way; what differs is
 getting the edges in front of it.
 
-**Known constraint at scale.** Relation reads are per-source and measured at
-**~6 s each**, so the full 1,226-source read takes **~15 minutes at 8 workers**
-(~2 hours sequential). Response size stays flat as the graph grows — reads are
+**Known constraint at scale.** Relation reads are per-source, and the full
+1,226-source read is measured at **~35 minutes** even parallelised (captured in
+[docs/hydra-parity.txt](docs/hydra-parity.txt)). Response size stays flat as the graph grows — reads are
 per-batch, not whole-graph — so there is no size cliff, but the *number* of
 sources grows linearly. Paging cannot help: `cursor` returns an empty page for
 any value and `next_cursor` is always null, so one large-limit request per

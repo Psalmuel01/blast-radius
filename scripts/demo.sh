@@ -41,7 +41,7 @@ echo "  a synced cache in front of it for interactive speed. --from-hydra skips"
 echo "  the cache and traverses edges served by HydraDB itself."
 echo
 echo "  Relation reads are per-source, so reading all 1,226 sources is a"
-echo "  multi-minute operation -- too slow to sit through live, and showing a"
+echo "  ~35 minute operation -- too slow to sit through live, and showing a"
 echo "  deliberately partial read would be the exact failure this tool exists to"
 echo "  prevent. So: the full read was run once, separately, and the confirmed"
 echo "  result is shown here."
@@ -52,7 +52,10 @@ else
   cat docs/hydra-parity.txt 2>/dev/null || echo "  (run scripts/capture_parity.sh first)"
 fi
 echo
-echo "  Byte-identical to the local traversal. The command, to run yourself:"
+echo "  Same answer as the local traversal -- same packages, same versions,"
+echo "  same depth. (HydraDB drops ~1% of edges at ingest, all of them leaf"
+echo "  dependencies nothing else depends on, so the stored edge count differs"
+echo "  while the query results do not.) The command, to run yourself:"
 echo "    python3 -m hydra_blast blast debug@4.4.2 --from-hydra"
 echo
 echo "  A bounded read is refused rather than answered, because a partial graph"

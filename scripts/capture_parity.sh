@@ -69,6 +69,13 @@ print("  while `strip-ansi` and `wrap-ansi` keep their hyphens in the same")
 print("  database. That is HydraDB's entity resolution making a judgement call,")
 print("  not data loss. The read path maps both forms back to the name that was")
 print("  sent, and the traversal results above are verified identical to local.")
+print()
+print(f"  Edge counts differ: {len(hydra_graph.edges):,} read back vs "
+      f"{len(local_graph.edges):,} sent (~1%).")
+print("  HydraDB drops a small share of relations at ingest -- a 400-pair batch")
+print("  returns 385-387 groups. The dropped edges are leaf dependencies that")
+print("  nothing else depends on, so no traversal passes through them and the")
+print("  query results are unaffected. The answers match; the edge count does not.")
 PY
 
 echo

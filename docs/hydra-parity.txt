@@ -1,0 +1,25 @@
+  $ python3 -m hydra_blast blast debug@4.4.2 --from-hydra
+
+  read 1226 sources from HydraDB 'hydra_blast_radius'
+  loaded 485,638 edges in 35.4 min (2123s, no cap, nothing skipped)
+
+  blast_radius  <debug@4.4.2>   48.4 ms
+    exposed_versions: 1378
+    exposed_packages: 237
+    max_depth_reached: 3
+
+  local graph:  237 packages / 1378 versions (84.8 ms)
+  identical to HydraDB result: True
+
+  Note: HydraDB normalises some entity names on ingest -- the seed
+  `ansi-styles` is stored as `ansistyles`, a different real npm package,
+  while `strip-ansi` and `wrap-ansi` keep their hyphens in the same
+  database. That is HydraDB's entity resolution making a judgement call,
+  not data loss. The read path maps both forms back to the name that was
+  sent, and the traversal results above are verified identical to local.
+
+  Edge counts differ: 485,638 read back vs 490,030 sent (~1%).
+  HydraDB drops a small share of relations at ingest -- a 400-pair batch
+  returns 385-387 groups. The dropped edges are leaf dependencies that
+  nothing else depends on, so no traversal passes through them and the
+  query results are unaffected. The answers match; the edge count does not.

@@ -104,6 +104,26 @@ round trip. The local graph stays authoritative for identity; HydraDB round
 trips are verified with the name-normalisation accounted for, and any parity
 claim has to be re-measured at scale rather than assumed from a small sample.
 
+## ~3% of relations do not survive ingest
+
+Separate from the naming issue, and only visible by comparing sent-vs-returned
+per source: a batch of **400 distinct `(source, target)` pairs comes back as
+385-387 relation groups**. The missing ones are not explained by name
+normalisation -- targets like `foreach` and `pascalcase` have no separators to
+strip, and `pascalcase` is even present in the response while its edge is not.
+
+Measured across the 490,030-edge graph, this is a **~1% shortfall** on read
+(485,243-485,641 edges across two independent full reads). It is stable and
+reproducible, not a transport error: failed sources are tracked separately and
+were 0 and 1 in those runs.
+
+**Why it does not change the answers:** the dropped edges are overwhelmingly
+leaf dependencies -- `version -> package` edges pointing at packages outside the
+crawl boundary, which nothing else depends on. All four graph-structural
+queries return identical results from HydraDB and local, verified twice on the
+full graph. But the edge count is not expected to match exactly, and any claim
+of "byte-identical storage" would be wrong.
+
 ## Gotchas that cost time
 1. `entities` as a list → outer "invalid graph_payload JSON" error that points at
    the *whole* payload, not the offending field. Misleading; it must be a map.
