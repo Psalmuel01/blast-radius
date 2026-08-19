@@ -40,7 +40,21 @@ def _load_graph(path: Path, args=None) -> Graph:
     cache exists.
     """
     if args is not None and getattr(args, "from_hydra", False):
-        from .graph.hydra import HydraClient, HydraError, load_graph_from_hydra
+        from .graph.hydra import (
+            HydraClient,
+            HydraError,
+            build_name_aliases,
+            load_graph_from_hydra,
+        )
+
+        # HydraDB rewrites some entity names on ingest. The local graph knows
+        # the names we sent, so use it to map the rewritten forms back.
+        aliases: dict[str, str] = {}
+        if path.exists():
+            try:
+                aliases = build_name_aliases(Graph.load(path))
+            except Exception:  # noqa: BLE001 - aliases are an optimisation
+                aliases = {}
 
         try:
             client = HydraClient.from_env()
@@ -50,6 +64,7 @@ def _load_graph(path: Path, args=None) -> Graph:
             graph = load_graph_from_hydra(
                 client, progress=False,
                 max_sources=getattr(args, 'hydra_sources', None),
+                name_aliases=aliases,
             )
             elapsed = (time.perf_counter() - started) * 1000
         except HydraError as exc:

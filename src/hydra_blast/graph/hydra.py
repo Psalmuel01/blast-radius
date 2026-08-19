@@ -86,7 +86,7 @@ class HydraClient:
             "API-Version": HYDRA_API_VERSION,
         }
 
-    def _get(self, path: str, *, retries: int = 3) -> dict:
+    def _get(self, path: str, *, retries: int = 6) -> dict:
         # Large relation payloads arrive in several chunks and a single read()
         # can return short, raising IncompleteRead. Read until the stream ends
         # and retry, since a truncated body is a transport fault, not a 4xx.
@@ -309,12 +309,64 @@ def _entity_id_for(name: str, namespace: str) -> str:
     return pkg_id(name)
 
 
+def build_name_aliases(local: Graph) -> dict[str, str]:
+    """Map HydraDB's normalised entity names back to the names we sent.
+
+    HydraDB resolves entity names on ingest and sometimes rewrites them: the
+    compromised seed `ansi-styles` is stored as `ansistyles`, which is a
+    *different real npm package*. The rewrite is not a uniform rule -- in the
+    same database `strip-ansi`, `wrap-ansi`, `ansi-regex` and `supports-color`
+    all keep their hyphens -- so it cannot be inverted by a transform.
+
+    Instead, derive candidate normalised forms from names we know we sent, and
+    map them back. Only names whose normalised form differs from the original
+    produce an entry, so this is a no-op for the vast majority of entities.
+    """
+    entity_names = {e.name for e in local.entities.values()}
+    real_names = set(entity_names)
+    # Dependency targets outside the crawl boundary have no entity of their own
+    # (nothing was fetched for them), but their names are still sent as edge
+    # endpoints -- and HydraDB normalises those too. Recover them from the
+    # edges so `uglify-js` does not read back as an unresolvable `uglifyjs`.
+    for edge in local.edges:
+        for node_id in (edge.source, edge.target):
+            prefix, _, rest = node_id.partition(":")
+            if prefix == "pkg" and rest:
+                real_names.add(rest)
+    aliases: dict[str, str] = {}
+    for name in real_names:
+        # The observed rewrite drops separators. Generate that candidate and
+        # map it home; if HydraDB never rewrote this name the entry is simply
+        # never looked up.
+        collapsed = name.replace("-", "").replace("_", "").replace(".", "")
+        if collapsed == name:
+            continue
+        # Never shadow a package that genuinely exists under the collapsed
+        # spelling -- `ansistyles` is itself a real npm package, so aliasing it
+        # blindly would merge two distinct packages.
+        #
+        # `ansi-styles` is the case that matters here: both spellings are real
+        # and both are in the graph. It is resolvable only because one of them
+        # is a crawled Package *entity* while the other appears solely as a
+        # dependency target, so prefer the entity when the two collide.
+        if collapsed in real_names and collapsed in entity_names:
+            continue
+        if collapsed in aliases and aliases[collapsed] != name:
+            # Two distinct names collapse to the same form: ambiguous, so
+            # refuse to guess which one HydraDB meant.
+            aliases.pop(collapsed)
+            continue
+        aliases[collapsed] = name
+    return aliases
+
+
 def load_graph_from_hydra(
     client: HydraClient | None = None,
     *,
     source_ids: list[str] | None = None,
     limit_per_source: int = 5000,
     max_sources: int | None = None,
+    name_aliases: dict[str, str] | None = None,
     workers: int = 8,
     progress: bool = True,
 ) -> Graph:
@@ -329,6 +381,7 @@ def load_graph_from_hydra(
     recovered from `context`, which persists verbatim.
     """
     client = client or HydraClient.from_env()
+    name_aliases = name_aliases or {}
     ids = source_ids or client.list_sources()
     truncated = False
     if max_sources is not None and len(ids) > max_sources:
@@ -352,11 +405,17 @@ def load_graph_from_hydra(
 
     graph = Graph()
 
+    failed_sources: list[str] = []
+
     def fetch(source_id: str):
         try:
             return client.relations(source_id=source_id, limit=limit_per_source)
         except HydraError as exc:
+            # A dropped source silently removes its edges, which shows up later
+            # as an unexplained parity gap. Record it so the caller can see the
+            # read was incomplete rather than trusting a short graph.
             log.warning("relations fetch failed for %s: %s", source_id, exc)
+            failed_sources.append(source_id)
             return []
 
     groups: list[dict] = []
@@ -375,6 +434,14 @@ def load_graph_from_hydra(
         target_name, target_ns = target.get("name"), target.get("namespace")
         if not (source_name and target_name and source_ns and target_ns):
             continue
+
+        # HydraDB's entity resolution rewrites some names on ingest (the seed
+        # `ansi-styles` comes back as `ansistyles`, a different real package),
+        # and it is not a uniform rule -- `strip-ansi` and `wrap-ansi` keep
+        # their hyphens in the same database. So map the returned name back to
+        # the name we actually sent before deriving the id.
+        source_name = name_aliases.get(source_name, source_name)
+        target_name = name_aliases.get(target_name, target_name)
 
         source_id_local = _entity_id_for(source_name, source_ns)
         target_id_local = _entity_id_for(target_name, target_ns)
@@ -416,7 +483,8 @@ def load_graph_from_hydra(
         "source": "hydradb",
         "database": client.database,
         "sources_read": len(ids),
-        "partial_read": truncated,
+        "partial_read": truncated or bool(failed_sources),
+        "failed_sources": len(failed_sources),
     }
 
     # HydraDB stores entity name/namespace but not our free-form attrs, so the

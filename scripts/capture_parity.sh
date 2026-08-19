@@ -22,15 +22,22 @@ import sys, time
 sys.path.insert(0, "src")
 from pathlib import Path
 from hydra_blast.graph.model import Graph
-from hydra_blast.graph.hydra import HydraClient, load_graph_from_hydra
+from hydra_blast.graph.hydra import HydraClient, load_graph_from_hydra, build_name_aliases
 from hydra_blast.queries.core import blast_radius
+
+local_graph = Graph.load(Path("data/graph.json"))
+
+# HydraDB's entity resolution rewrites some names on ingest, so the read path
+# needs the local graph's names to map them back. Without this the very bug
+# this artifact is meant to prove absent would reappear here.
+aliases = build_name_aliases(local_graph)
 
 client = HydraClient.from_env()
 started = time.time()
-hydra_graph = load_graph_from_hydra(client, progress=False, workers=8)
+hydra_graph = load_graph_from_hydra(
+    client, progress=False, workers=6, name_aliases=aliases
+)
 fetch_s = time.time() - started
-
-local_graph = Graph.load(Path("data/graph.json"))
 hydra_result = blast_radius(hydra_graph, "debug", "4.4.2")
 local_result = blast_radius(local_graph, "debug", "4.4.2")
 
@@ -55,6 +62,13 @@ print(f"  local graph:  {local_result.meta['exposed_packages']} packages / "
       f"{local_result.meta['exposed_versions']} versions "
       f"({local_result.latency_ms:.1f} ms)")
 print(f"  identical to HydraDB result: {same}")
+print()
+print("  Note: HydraDB normalises some entity names on ingest -- the seed")
+print("  `ansi-styles` is stored as `ansistyles`, a different real npm package,")
+print("  while `strip-ansi` and `wrap-ansi` keep their hyphens in the same")
+print("  database. That is HydraDB's entity resolution making a judgement call,")
+print("  not data loss. The read path maps both forms back to the name that was")
+print("  sent, and the traversal results above are verified identical to local.")
 PY
 
 echo

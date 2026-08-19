@@ -60,11 +60,35 @@ python -m hydra_blast blast debug@4.4.2 --from-hydra
 #   exposed_versions: 1378   exposed_packages: 237   <- identical to local
 ```
 
-All five queries are checked for parity, not just this one — `blast_radius`,
-`shared_maintainer`, `live_resolution_window`, `version_introduced` and
-`typosquat_candidates` return identical rows from either source, including the
+The four graph-structural queries are checked for parity, not just this one —
+`blast_radius`, `shared_maintainer`, `live_resolution_window` and
+`version_introduced` return identical rows from either source, including the
 full 74-minute window (`13:12:39Z → 14:26:51Z`) and `4.4.2 → 4.4.3`.
 `scripts/capture_parity.sh` re-runs that check end to end.
+
+`typosquat_candidates` is the exception, and it **refuses to answer** over a
+HydraDB read rather than returning a plausible-looking wrong list. It scores on
+download counts and registration dates, which are entity *attributes*, and
+HydraDB persists only entity name and namespace — so from HydraDB the
+popularity filter has nothing to filter on and stops excluding legitimate
+neighbours. That is a real limit of what round-trips, so the query says so
+instead of guessing.
+
+**HydraDB normalises entity names on ingest.** The seed `ansi-styles` is stored
+as **`ansistyles`** — which is a different, real npm package — while
+`strip-ansi`, `wrap-ansi`, `ansi-regex` and `supports-color` keep their hyphens
+in the same database. It is entity resolution making a judgement call, not data
+loss, and not a rule that can be inverted by a transform.
+
+It matters because names are the only join key across the round trip: every
+edge touching a renamed entity resolves to a different id on read and looks
+*missing*. Measured on the 490,030-edge graph before the fix: 483,519 edges read
+back (−1.3%) and `blast_radius` returned 1,350 versions instead of 1,378. The
+read path now maps normalised forms back to the names that were sent, deriving
+the map from the local graph rather than hardcoding a transform, and refusing
+to alias a name that genuinely exists under both spellings. Worth knowing about
+if you build on this: **do not assume an entity reads back under the name you
+gave it.**
 
 **The division of labour:** HydraDB is the durable, temporally-versioned store
 of record — the graph lives there, with its typed entities, predicates and

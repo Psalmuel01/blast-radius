@@ -85,6 +85,25 @@ def typosquat_candidates(
 
     target_entity = graph.entities.get(f"pkg:{package}")
     target_downloads = (target_entity.attrs.get("downloads") if target_entity else None) or 0
+
+    # This query scores on download counts and registration age, which live in
+    # entity *attributes*. HydraDB persists only entity name and namespace, so
+    # a graph read back with --from-hydra has none of them and the popularity
+    # filter cannot exclude legitimate neighbours -- it would return a longer,
+    # noisier list that looks like a real answer. Say so instead.
+    if graph.provenance.get("source") == "hydradb":
+        return QueryResult(
+            query="typosquat_candidates",
+            subject=package,
+            rows=[],
+            latency_ms=time.perf_counter() * 1000.0 - started,
+            meta={
+                "unavailable": "typosquat scoring needs download counts and "
+                               "registration dates, which HydraDB does not "
+                               "persist as entity attributes -- run without "
+                               "--from-hydra",
+            },
+        )
     bare_target = _strip_scope(package)
 
     rows = []
