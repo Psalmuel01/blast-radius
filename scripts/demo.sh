@@ -10,6 +10,10 @@ cd "$(dirname "$0")/.."
 export PYTHONPATH=src
 
 PAUSE=${1:-}
+
+# Pre-captured full-read parity output. Override to show a different capture;
+# defaults to the committed artifact. Needs a default because of `set -u`.
+HYDRA_PARITY_CAPTURE=${HYDRA_PARITY_CAPTURE:-docs/hydra-parity.txt}
 step() {
   echo
   echo "──────────────────────────────────────────────────────────────"
@@ -49,7 +53,7 @@ echo
 if [ -f "$HYDRA_PARITY_CAPTURE" ]; then
   cat "$HYDRA_PARITY_CAPTURE"
 else
-  cat docs/hydra-parity.txt 2>/dev/null || echo "  (run scripts/capture_parity.sh first)"
+  echo "  (no parity capture found -- run scripts/capture_parity.sh first)"
 fi
 echo
 echo "  Same answer as the local traversal -- same packages, same versions,"
