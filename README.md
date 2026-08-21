@@ -1,5 +1,13 @@
 # Blast Radius — supply-chain exposure as a graph traversal
 
+## 📺 Demo video: **https://youtu.be/NIfFKjUR3rg**
+
+> **Hack Hydra reviewers:** the submission form was sent with a placeholder
+> `https://` in the video field. The correct demo video link is the one above —
+> **https://youtu.be/NIfFKjUR3rg**
+
+---
+
 When an npm package is compromised, a defender has minutes, not days, to answer:
 **what did this actually reach?**
 
