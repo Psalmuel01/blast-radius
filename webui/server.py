@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import traceback
 from functools import lru_cache
@@ -27,7 +28,14 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from hydra_blast.config import GRAPH_PATH, SEEDS, SEED_ADVISORIES  # noqa: E402
-from hydra_blast.graph.model import Graph, adv_id, pkg_id, ver_id  # noqa: E402
+from hydra_blast.graph.model import (  # noqa: E402
+    NS_ADVISORY,
+    P_AFFECTS,
+    Graph,
+    adv_id,
+    pkg_id,
+    ver_id,
+)
 from hydra_blast.queries.core import (  # noqa: E402
     blast_radius,
     live_resolution_window,
@@ -37,6 +45,7 @@ from hydra_blast.queries.core import (  # noqa: E402
 from hydra_blast.queries.typosquat import typosquat_candidates  # noqa: E402
 
 INDEX_HTML = REPO_ROOT / "webui" / "index.html"
+PARITY_FILE = REPO_ROOT / "docs" / "hydra-parity.txt"
 
 
 @lru_cache(maxsize=1)
@@ -49,6 +58,69 @@ def load_graph() -> Graph:
     return Graph.load(GRAPH_PATH)
 
 
+# ---------------------------------------------------------------------------
+# Honesty marker: re-verify against the captured artifact rather than claim it
+# ---------------------------------------------------------------------------
+
+def _parse_parity_expectations() -> dict | None:
+    """Pull the recorded blast-radius numbers out of docs/hydra-parity.txt.
+
+    The artifact is the record of a full HydraDB read. Parsing it means the
+    badge in the UI reflects an actual comparison instead of a hardcoded
+    promise -- if the graph or the query drifts, the badge goes red on its own.
+    """
+    if not PARITY_FILE.exists():
+        return None
+    text = PARITY_FILE.read_text()
+    versions = re.search(r"exposed_versions:\s*(\d+)", text)
+    packages = re.search(r"exposed_packages:\s*(\d+)", text)
+    depth = re.search(r"max_depth_reached:\s*(\d+)", text)
+    subject = re.search(r"blast\s+(\S+)@(\S+)\s+--from-hydra", text)
+    if not (versions and packages):
+        return None
+    return {
+        "package": subject.group(1) if subject else "debug",
+        "version": subject.group(2) if subject else "4.4.2",
+        "exposed_versions": int(versions.group(1)),
+        "exposed_packages": int(packages.group(1)),
+        "max_depth_reached": int(depth.group(1)) if depth else None,
+    }
+
+
+def verify_against_parity() -> dict:
+    """Run the recorded query now and compare with what the artifact recorded."""
+    expected = _parse_parity_expectations()
+    if expected is None:
+        return {"status": "unavailable", "reason": "docs/hydra-parity.txt not found"}
+
+    try:
+        result = blast_radius(load_graph(), expected["package"], expected["version"])
+    except Exception as exc:  # noqa: BLE001 - reported, never raised to the page
+        return {"status": "error", "reason": f"{type(exc).__name__}: {exc}"}
+
+    actual = {
+        "exposed_versions": result.meta["exposed_versions"],
+        "exposed_packages": result.meta["exposed_packages"],
+        "max_depth_reached": result.meta["max_depth_reached"],
+    }
+    mismatches = {
+        key: {"expected": expected[key], "actual": actual[key]}
+        for key in actual
+        if expected.get(key) is not None and expected[key] != actual[key]
+    }
+    return {
+        "status": "match" if not mismatches else "mismatch",
+        "subject": f"{expected['package']}@{expected['version']}",
+        "expected": {k: expected[k] for k in actual},
+        "actual": actual,
+        "mismatches": mismatches,
+        "latency_ms": round(result.latency_ms, 2),
+    }
+
+
+# ---------------------------------------------------------------------------
+
+
 def _seed_options(graph: Graph) -> list[dict]:
     """Seeds present in the graph, with their compromised version if known."""
     options = []
@@ -57,14 +129,12 @@ def _seed_options(graph: Graph) -> list[dict]:
             continue
         advisory = SEED_ADVISORIES.get(name)
         compromised = None
-        if advisory:
-            node = graph.entities.get(adv_id(advisory))
-            if node is not None:
-                for edge in graph.out_edges(adv_id(advisory), "affects"):
-                    target = graph.entities.get(edge.target)
-                    if target and target.attrs.get("package") == name:
-                        compromised = target.attrs.get("version")
-                        break
+        if advisory and adv_id(advisory) in graph.entities:
+            for edge in graph.out_edges(adv_id(advisory), P_AFFECTS):
+                target = graph.entities.get(edge.target)
+                if target and target.attrs.get("package") == name:
+                    compromised = target.attrs.get("version")
+                    break
         options.append({"package": name, "advisory": advisory, "version": compromised})
     return options
 
@@ -90,14 +160,18 @@ def run_query(kind: str, params: dict) -> dict:
         if not package:
             raise ValueError("package is required")
         if pkg_id(package) not in graph.entities:
+            # Same shape as the CLI's fail-loudly message: an empty result for
+            # an uncrawled package is indistinguishable from a real negative.
             raise ValueError(
-                f"'{package}' is not in this graph "
-                f"({len(graph.entities):,} entities, {graph.describes()})"
+                f"'{package}' is not in this graph, so any result would be "
+                f"empty and misleading.\n"
+                f"graph: {len(graph.entities):,} entities, built from "
+                f"{graph.describes()}"
             )
 
     if kind == "blast":
         if not version:
-            raise ValueError("version is required, e.g. 4.4.2")
+            raise ValueError("blast needs a version: e.g. debug@4.4.2")
         return _result_payload(blast_radius(graph, package, version))
 
     if kind == "maintainer":
@@ -108,7 +182,7 @@ def run_query(kind: str, params: dict) -> dict:
 
     if kind == "window":
         if not version:
-            raise ValueError("version is required, e.g. 4.4.2")
+            raise ValueError("window needs a version: e.g. debug@4.4.2")
         advisory = (params.get("advisory") or "").strip()
         start = end = None
         if advisory:
@@ -119,13 +193,13 @@ def run_query(kind: str, params: dict) -> dict:
         start = start or (params.get("start") or "").strip() or None
         end = end or (params.get("end") or "").strip() or None
         if not start:
-            raise ValueError("need an advisory (to derive the window) or an explicit start")
+            raise ValueError("need --start or an --advisory whose window can be derived")
         return _result_payload(live_resolution_window(graph, package, version, start, end))
 
     if kind == "introduced":
         advisory = (params.get("advisory") or "").strip()
         if not advisory:
-            raise ValueError("advisory id is required, e.g. MAL-2025-46974")
+            raise ValueError("introduced needs an advisory id: e.g. MAL-2025-46974")
         return _result_payload(version_introduced(graph, advisory))
 
     raise ValueError(f"unknown query '{kind}'")
@@ -138,6 +212,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
 
@@ -165,10 +240,12 @@ class Handler(BaseHTTPRequestHandler):
                 "stats": graph.stats(),
                 "provenance": graph.describes(),
                 "seeds": _seed_options(graph),
-                "advisories": sorted(
-                    {e.name for e in graph.by_namespace("Advisory")}
-                )[:200],
+                "advisories": sorted({e.name for e in graph.by_namespace(NS_ADVISORY)}),
             })
+            return
+
+        if route == "/api/verify":
+            self._send_json(200, verify_against_parity())
             return
 
         if route == "/api/query":
@@ -186,7 +263,6 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json(404, {"error": "not found"})
 
     def log_message(self, fmt: str, *args) -> None:
-        # One tidy line per request instead of the default noise.
         sys.stderr.write("  %s\n" % (fmt % args))
 
 
@@ -201,7 +277,9 @@ def main() -> None:
     except Exception as exc:  # noqa: BLE001
         sys.exit(f"cannot start: {exc}")
 
+    check = verify_against_parity()
     print(f"  graph: {len(graph.entities):,} entities / {len(graph.edges):,} edges")
+    print(f"  parity check vs docs/hydra-parity.txt: {check.get('status')}")
     print(f"  serving http://{args.host}:{args.port}  (read-only, ctrl-c to stop)")
     ThreadingHTTPServer((args.host, args.port), Handler).serve_forever()
 

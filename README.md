@@ -3,7 +3,7 @@
 ## 📺 Demo video: **https://youtu.be/NIfFKjUR3rg**
 
 > **Hack Hydra reviewers:** the submission form was sent with a placeholder
-> `https://` in the video field. The correct demo video link is the one above —
+> `https://` in the video field due to a copy-paste cutoff. The correct demo video link is the one above —
 > **https://youtu.be/NIfFKjUR3rg**
 
 ---
@@ -210,13 +210,30 @@ Add `--json` for machine-readable output, `--limit N` to show more rows.
 
 ## Query UI
 
-A minimal local UI is included for browsing the five core queries without the CLI:
+A minimal local UI is included for browsing the five core queries without the CLI.
+It reads the same `data/graph.json` the CLI does, so build a graph first if you
+have not already (`python3 -m hydra_blast crawl --hops 1 --top1 40`, ~2 min):
 
     python3 webui/server.py
     # open http://127.0.0.1:8000
 
-No third-party dependencies, stdlib http.server only. Read-only, calls the
-same query functions the CLI and eval harness use.
+No third-party dependencies, stdlib `http.server` only — no CDN scripts, no
+build step, nothing to install. Read-only: it calls the same query functions
+the CLI and eval harness use, and defines no query logic of its own.
+
+![Blast radius in the query UI](docs/img/webui-blast-radius.png)
+
+Each query renders in the shape of its own result rather than one generic
+table — blast radius shows depth per row, the live window splits in-window from
+excluded, typosquats show edit distance against download counts.
+
+![Live-resolution window](docs/img/webui-live-window.png)
+
+The badge next to **Run query** is not a claim, it is a check: on load the
+server re-runs the exact query recorded in
+[docs/hydra-parity.txt](docs/hydra-parity.txt), compares the result to the
+numbers parsed out of that file, and turns red on any mismatch
+(`GET /api/verify`).
 
 ## Evaluation
 

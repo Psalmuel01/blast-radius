@@ -3,235 +3,489 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Blast Radius — supply-chain exposure</title>
+<title>Blast Radius — supply-chain exposure as graph traversal</title>
 <style>
   :root {
-    --bg: #0d1117; --panel: #161b22; --line: #30363d;
-    --text: #e6edf3; --dim: #8b949e; --accent: #58a6ff;
-    --bad: #f85149; --ok: #3fb950; --warn: #d29922;
-    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --bg:        #0a0c10;
+    --surface:   #11141a;
+    --surface-2: #161a21;
+    --line:      #232830;
+    --text:      #e8eaed;
+    --dim:       #9aa3ad;
+    --faint:     #6b737d;
+
+    --accent:     #55aaff;   /* brand / primary */
+    --maintainer: #b98cff;   /* purple */
+    --package:    #3fd0c9;   /* teal   */
+    --version:    #55aaff;   /* blue   */
+    --advisory:   #ff6b6b;   /* coral  */
+    --neutral:    #9aa3ad;   /* gray   */
+
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
   }
   * { box-sizing: border-box; }
+  html, body { background: var(--bg); }
   body {
-    margin: 0; background: var(--bg); color: var(--text);
-    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    margin: 0; color: var(--text); font: 15px/1.6 var(--sans);
+    -webkit-font-smoothing: antialiased;
   }
-  header {
-    padding: 20px 24px; border-bottom: 1px solid var(--line); background: var(--panel);
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+  /* ---------- header ---------- */
+  header { border-bottom: 1px solid var(--line); padding: 28px 32px; }
+  .brand { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+  .wordmark { font-size: 21px; font-weight: 600; letter-spacing: -0.02em; margin: 0; }
+  .wordmark .dot { color: var(--accent); }
+  .tagline { color: var(--dim); font-size: 14px; }
+  .graphline { margin-top: 10px; font-size: 12.5px; color: var(--faint); }
+  .graphline b { color: var(--dim); font-weight: 500; }
+
+  /* ---------- layout ---------- */
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 28px 32px 80px; }
+  .panel {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 10px; padding: 22px; margin-bottom: 22px;
   }
-  h1 { margin: 0 0 4px; font-size: 18px; letter-spacing: -0.01em; }
-  .sub { color: var(--dim); font-size: 13px; }
-  .wrap { max-width: 1100px; margin: 0 auto; padding: 20px 24px 60px; }
-  .card {
-    background: var(--panel); border: 1px solid var(--line);
-    border-radius: 8px; padding: 16px; margin-bottom: 16px;
+
+  /* ---------- query panel ---------- */
+  .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 20px; }
+  .tab {
+    padding: 7px 14px; border-radius: 7px; border: 1px solid var(--line);
+    background: transparent; color: var(--dim); font: 500 13px var(--sans);
+    cursor: pointer; transition: color .12s, border-color .12s;
   }
-  label { display: block; font-size: 12px; color: var(--dim); margin-bottom: 4px; }
-  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
-  .field { flex: 1 1 200px; min-width: 160px; }
+  .tab:hover { color: var(--text); border-color: #313842; }
+  .tab[aria-selected="true"] {
+    color: var(--bg); background: var(--accent); border-color: var(--accent);
+  }
+  .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 16px; }
+  label { display: block; font-size: 11.5px; letter-spacing: .04em;
+          text-transform: uppercase; color: var(--faint); margin-bottom: 6px; }
   select, input {
-    width: 100%; padding: 8px 10px; background: var(--bg); color: var(--text);
-    border: 1px solid var(--line); border-radius: 6px; font: inherit;
+    width: 100%; padding: 9px 11px; background: var(--bg); color: var(--text);
+    border: 1px solid var(--line); border-radius: 7px;
+    font: 14px var(--mono); outline: none;
   }
-  input { font-family: var(--mono); }
-  .btns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
-  button {
-    padding: 8px 14px; border-radius: 6px; border: 1px solid var(--line);
-    background: #21262d; color: var(--text); font: inherit; cursor: pointer;
+  select:focus, input:focus { border-color: var(--accent); }
+  .hint { font-size: 12px; color: var(--faint); margin-top: 6px; }
+  .run {
+    margin-top: 18px; padding: 10px 20px; border-radius: 7px; border: 0;
+    background: var(--accent); color: #06223f; font: 600 14px var(--sans);
+    cursor: pointer;
   }
-  button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
-  button:disabled { opacity: .5; cursor: default; }
-  button.primary { background: #1f6feb; border-color: #1f6feb; color: #fff; }
-  button.primary:hover:not(:disabled) { background: #388bfd; color: #fff; }
-  .meta { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 12px; }
-  .stat { font-family: var(--mono); }
-  .stat b { display: block; font-size: 20px; color: var(--accent); }
-  .stat span { font-size: 11px; color: var(--dim); text-transform: uppercase; }
-  table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 12.5px; }
-  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); }
-  th { color: var(--dim); font-weight: 500; position: sticky; top: 0; background: var(--panel); }
-  tbody tr:hover { background: #1c2128; }
-  .scroll { max-height: 460px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; }
-  .depth { display: inline-block; min-width: 18px; text-align: center;
-           border-radius: 4px; padding: 0 5px; font-size: 11px; }
-  .d1 { background: #4a1d1d; color: #ff9c95; }
-  .d2 { background: #4a331d; color: #ffcc80; }
-  .d3 { background: #1d3a4a; color: #90d0ff; }
-  .err { color: var(--bad); font-family: var(--mono); white-space: pre-wrap; }
-  .note { color: var(--dim); font-size: 12px; margin-top: 10px; }
-  .pill { font-family: var(--mono); font-size: 11px; color: var(--dim);
-          border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; }
-  a { color: var(--accent); }
+  .run:disabled { opacity: .5; cursor: default; }
+  .run:hover:not(:disabled) { background: #6fb8ff; }
+
+  /* ---------- stats ---------- */
+  .stats { display: flex; gap: 30px; flex-wrap: wrap; margin-bottom: 20px; }
+  .stat b { display: block; font: 600 24px var(--mono); letter-spacing: -0.02em; }
+  .stat span { font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: var(--faint); }
+  .c-pkg  b { color: var(--package); }
+  .c-ver  b { color: var(--version); }
+  .c-adv  b { color: var(--advisory); }
+  .c-mnt  b { color: var(--maintainer); }
+  .c-neu  b { color: var(--neutral); }
+
+  /* ---------- tables ---------- */
+  .scroll { max-height: 520px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 9px 14px; border-bottom: 1px solid var(--line); }
+  th {
+    position: sticky; top: 0; background: var(--surface-2); z-index: 1;
+    font: 500 11px var(--sans); letter-spacing: .05em;
+    text-transform: uppercase; color: var(--faint);
+  }
+  td { font: 13px var(--mono); font-variant-numeric: tabular-nums; }
+  tbody tr:last-child td { border-bottom: 0; }
+  tbody tr:hover { background: var(--surface-2); }
+  .pkg { color: var(--package); }
+  .ver { color: var(--version); }
+  .adv { color: var(--advisory); }
+  .mnt { color: var(--maintainer); }
+  .neu { color: var(--dim); }
+  .range { color: var(--faint); }
+
+  .depth {
+    display: inline-block; min-width: 22px; padding: 1px 7px; border-radius: 5px;
+    font: 600 11px var(--mono); text-align: center;
+  }
+  .depth-1 { background: rgba(255,107,107,.16); color: var(--advisory); }
+  .depth-2 { background: rgba(255,176,107,.14); color: #ffb06b; }
+  .depth-3 { background: rgba(85,170,255,.14);  color: var(--accent); }
+
+  .badge {
+    display: inline-block; padding: 1px 8px; border-radius: 999px;
+    font: 600 11px var(--mono); white-space: nowrap;
+  }
+  .in-window  { background: rgba(63,208,201,.14); color: var(--package); }
+  .out-window { background: rgba(154,163,173,.14); color: var(--neutral); }
+
+  /* ---------- states ---------- */
+  .loading { display: flex; align-items: center; gap: 11px; color: var(--dim); font-size: 14px; }
+  .spinner {
+    width: 15px; height: 15px; border: 2px solid var(--line);
+    border-top-color: var(--accent); border-radius: 50%;
+    animation: spin .7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .error {
+    border-left: 3px solid var(--advisory); background: rgba(255,107,107,.06);
+    padding: 14px 18px; border-radius: 0 8px 8px 0;
+    font: 13px/1.7 var(--mono); color: #ffb3b3; white-space: pre-wrap;
+  }
+  .empty { padding: 22px; color: var(--dim); font-size: 14px; }
+  .note { margin-top: 12px; font-size: 12px; color: var(--faint); }
+
+  /* ---------- window split bar ---------- */
+  .split { display: flex; height: 8px; border-radius: 4px; overflow: hidden; margin: 4px 0 14px; }
+  .split i { display: block; height: 100%; }
+  .split .inw { background: var(--package); }
+  .split .outw { background: #2c323b; }
+  .legend { display: flex; gap: 18px; font-size: 12px; color: var(--dim); margin-bottom: 16px; }
+  .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 6px; }
+
+  /* ---------- verify badge ---------- */
+  .verify {
+    display: inline-flex; align-items: center; gap: 8px; margin-top: 16px;
+    padding: 7px 13px; border: 1px solid var(--line); border-radius: 999px;
+    font: 12px var(--mono); color: var(--dim); cursor: help;
+  }
+  .verify .led { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+  .verify.match    .led { background: var(--package); }
+  .verify.mismatch .led { background: var(--advisory); }
+  .verify.match    { border-color: rgba(63,208,201,.35); }
+  .verify.mismatch { border-color: rgba(255,107,107,.45); color: #ffb3b3; }
+
+  footer { border-top: 1px solid var(--line); padding: 20px 32px;
+           color: var(--faint); font-size: 12.5px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
+
 <header>
-  <h1>Blast Radius <span class="pill" id="graphPill">loading…</span></h1>
-  <div class="sub">
-    Supply-chain exposure as a graph traversal. Read-only view over the local
-    graph — the same queries the CLI runs.
+  <div class="brand">
+    <h1 class="wordmark">Blast Radius<span class="dot">.</span></h1>
+    <span class="tagline">supply-chain exposure as graph traversal</span>
   </div>
+  <div class="graphline" id="graphline">loading graph…</div>
 </header>
 
 <div class="wrap">
-  <div class="card">
-    <div class="row">
-      <div class="field">
+  <div class="panel">
+    <div class="tabs" role="tablist" id="tabs">
+      <button class="tab" role="tab" data-kind="blast"      aria-selected="true">Blast radius</button>
+      <button class="tab" role="tab" data-kind="maintainer" aria-selected="false">Shared maintainer</button>
+      <button class="tab" role="tab" data-kind="window"     aria-selected="false">Live window</button>
+      <button class="tab" role="tab" data-kind="typosquat"  aria-selected="false">Typosquats</button>
+      <button class="tab" role="tab" data-kind="introduced" aria-selected="false">Version introduced</button>
+    </div>
+
+    <div class="fields">
+      <div id="f-package">
         <label for="pkg">Compromised package</label>
         <select id="pkg"></select>
       </div>
-      <div class="field">
+      <div id="f-version">
         <label for="ver">Version</label>
-        <input id="ver" placeholder="4.4.2" autocomplete="off">
+        <input id="ver" spellcheck="false" autocomplete="off" placeholder="4.4.2">
       </div>
-      <div class="field">
-        <label for="adv">Advisory (for window / introduced)</label>
-        <input id="adv" placeholder="MAL-2025-46974" autocomplete="off">
+      <div id="f-advisory">
+        <label for="adv">Advisory</label>
+        <input id="adv" spellcheck="false" autocomplete="off" placeholder="MAL-2025-46974">
       </div>
     </div>
-    <div class="btns">
-      <button class="primary" data-kind="blast">Blast radius</button>
-      <button data-kind="maintainer">Shared maintainer</button>
-      <button data-kind="window">Live window</button>
-      <button data-kind="typosquat">Typosquats</button>
-      <button data-kind="introduced">Version introduced</button>
+    <div class="hint" id="hint"></div>
+
+    <button class="run" id="run">Run query</button>
+
+    <div class="verify" id="verify" title="Runs the query recorded in docs/hydra-parity.txt and compares the result live.">
+      <span class="led"></span><span id="verifyText">checking parity…</span>
     </div>
-    <div class="note" id="provenance"></div>
   </div>
 
-  <div class="card" id="resultCard" style="display:none">
-    <div class="meta" id="meta"></div>
-    <div class="scroll"><table>
-      <thead id="thead"></thead><tbody id="tbody"></tbody>
-    </table></div>
-    <div class="note" id="truncated"></div>
-  </div>
-
-  <div class="card err" id="errorCard" style="display:none"></div>
+  <div class="panel" id="output" style="display:none"></div>
 </div>
+
+<footer>
+  Read-only view over the local graph. Calls the same query functions as the CLI
+  and the eval harness — no query logic lives in this UI.
+</footer>
 
 <script>
 const $ = (id) => document.getElementById(id);
-let SEEDS = [];
+let SEEDS = [], KIND = "blast";
+
+const esc = (v) => String(v == null ? "" : v)
+  .replace(/[<>&"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c]));
+const num = (v) => (typeof v === "number" ? v.toLocaleString() : esc(v));
+
+/* Which inputs each query actually uses — hiding the rest keeps the panel
+   honest about what affects the result. */
+const FIELDS = {
+  blast:      { package: 1, version: 1, advisory: 0, hint: "Transitive closure of everything that resolves to this version." },
+  maintainer: { package: 1, version: 0, advisory: 0, hint: "Other packages the same maintainer account can publish to." },
+  window:     { package: 1, version: 1, advisory: 1, hint: "Advisory supplies the window: version publish time → advisory publish time." },
+  typosquat:  { package: 1, version: 0, advisory: 0, hint: "Edit-distance neighbours filtered by downloads and registration age." },
+  introduced: { package: 0, version: 0, advisory: 1, hint: "Which release first carried the advisory, and what fixed it." },
+};
+
+function applyKind(kind) {
+  KIND = kind;
+  document.querySelectorAll(".tab").forEach((t) =>
+    t.setAttribute("aria-selected", String(t.dataset.kind === kind)));
+  const f = FIELDS[kind];
+  $("f-package").style.display  = f.package  ? "" : "none";
+  $("f-version").style.display  = f.version  ? "" : "none";
+  $("f-advisory").style.display = f.advisory ? "" : "none";
+  $("hint").textContent = f.hint;
+}
 
 async function loadMeta() {
   try {
-    const res = await fetch("/api/meta");
-    const data = await res.json();
+    const data = await (await fetch("/api/meta")).json();
     if (data.error) throw new Error(data.error);
     SEEDS = data.seeds || [];
     const s = data.stats || {};
-    $("graphPill").textContent =
-      `${(s.entities || 0).toLocaleString()} entities · ${(s.edges || 0).toLocaleString()} edges`;
-    $("provenance").textContent = "Graph built from " + (data.provenance || "unknown");
+    $("graphline").innerHTML =
+      `<b>${num(s.entities)}</b> entities · <b>${num(s.edges)}</b> edges · ` +
+      `<b>${num(s.Package)}</b> packages · <b>${num(s.Advisory)}</b> advisories ` +
+      `· ${esc(data.provenance)}`;
     const sel = $("pkg");
-    sel.innerHTML = "";
-    SEEDS.forEach((seed) => {
-      const opt = document.createElement("option");
-      opt.value = seed.package;
-      opt.textContent = seed.package + (seed.version ? ` @ ${seed.version}` : "");
-      sel.appendChild(opt);
-    });
-    syncFields();
+    sel.innerHTML = SEEDS.map((s) =>
+      `<option value="${esc(s.package)}">${esc(s.package)}${s.version ? " @ " + esc(s.version) : ""}</option>`
+    ).join("");
+    syncSeed();
   } catch (err) {
-    showError("Could not load graph metadata:\n" + err.message);
+    $("graphline").textContent = "could not load graph: " + err.message;
   }
 }
 
-// Prefill the version and advisory that belong to the selected seed, so the
-// default state is always a query that actually returns something.
-function syncFields() {
+/* Prefill the compromised version + advisory for the selected seed, so the
+   first click always produces a real result rather than an error. */
+function syncSeed() {
   const seed = SEEDS.find((s) => s.package === $("pkg").value);
   if (!seed) return;
   if (seed.version) $("ver").value = seed.version;
   if (seed.advisory) $("adv").value = seed.advisory;
 }
 
-function showError(message) {
-  $("errorCard").style.display = "block";
-  $("errorCard").textContent = message;
-  $("resultCard").style.display = "none";
-}
-
-function depthCell(value) {
-  if (value === undefined || value === null) return "";
-  const cls = value <= 1 ? "d1" : value === 2 ? "d2" : "d3";
-  return `<span class="depth ${cls}">${value}</span>`;
-}
-
-const COLUMNS = [
-  "package", "version", "depth", "declared_range", "reason",
-  "shared_maintainers", "score", "edit_distance", "pattern",
-  "introduced_in", "likely_patched_in", "downloads",
-];
-
-function render(data) {
-  $("errorCard").style.display = "none";
-  $("resultCard").style.display = "block";
-
-  const stats = [
-    ["rows", data.total_rows],
-    ["latency", data.latency_ms + " ms"],
-  ];
-  for (const [k, v] of Object.entries(data.meta || {})) {
-    if (typeof v === "object") continue;
-    stats.push([k.replace(/_/g, " "), v]);
-  }
-  $("meta").innerHTML = stats
-    .map(([k, v]) => `<div class="stat"><b>${v}</b><span>${k}</span></div>`)
-    .join("");
-
-  const rows = data.rows || [];
-  if (!rows.length) {
-    $("thead").innerHTML = "";
-    $("tbody").innerHTML =
-      `<tr><td style="color:var(--dim)">No results — this is a real answer, not an error.</td></tr>`;
-    $("truncated").textContent = "";
-    return;
-  }
-
-  const cols = COLUMNS.filter((c) => rows.some((r) => r[c] !== undefined && r[c] !== null && r[c] !== ""));
-  $("thead").innerHTML = "<tr>" + cols.map((c) => `<th>${c.replace(/_/g, " ")}</th>`).join("") + "</tr>";
-  $("tbody").innerHTML = rows.map((row) =>
-    "<tr>" + cols.map((c) => {
-      if (c === "depth") return `<td>${depthCell(row[c])}</td>`;
-      let v = row[c];
-      if (Array.isArray(v)) v = v.join(", ");
-      if (v === undefined || v === null) v = "";
-      return `<td>${String(v).replace(/[<>&]/g, (ch) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[ch]))}</td>`;
-    }).join("") + "</tr>"
-  ).join("");
-
-  $("truncated").textContent = data.total_rows > rows.length
-    ? `Showing ${rows.length} of ${data.total_rows} rows.`
-    : "";
-}
-
-async function runQuery(kind) {
-  const params = new URLSearchParams({
-    kind,
-    package: $("pkg").value,
-    version: $("ver").value,
-    advisory: $("adv").value,
-  });
-  document.querySelectorAll("button[data-kind]").forEach((b) => (b.disabled = true));
+async function checkParity() {
   try {
-    const res = await fetch("/api/query?" + params.toString());
-    const data = await res.json();
-    if (data.error) showError(data.error);
-    else render(data);
-  } catch (err) {
-    showError("Request failed: " + err.message);
-  } finally {
-    document.querySelectorAll("button[data-kind]").forEach((b) => (b.disabled = false));
+    const v = await (await fetch("/api/verify")).json();
+    const el = $("verify");
+    el.classList.remove("match", "mismatch");
+    if (v.status === "match") {
+      el.classList.add("match");
+      $("verifyText").textContent =
+        `verified identical to docs/hydra-parity.txt · ${v.subject} · ` +
+        `${num(v.actual.exposed_packages)} pkgs / ${num(v.actual.exposed_versions)} versions`;
+    } else if (v.status === "mismatch") {
+      el.classList.add("mismatch");
+      $("verifyText").textContent = "MISMATCH vs docs/hydra-parity.txt — " +
+        Object.entries(v.mismatches)
+          .map(([k, m]) => `${k}: expected ${m.expected}, got ${m.actual}`).join("; ");
+    } else {
+      $("verifyText").textContent = "parity check unavailable: " + (v.reason || v.status);
+    }
+  } catch {
+    $("verifyText").textContent = "parity check unavailable";
   }
 }
 
-document.querySelectorAll("button[data-kind]").forEach((btn) =>
-  btn.addEventListener("click", () => runQuery(btn.dataset.kind))
-);
-$("pkg").addEventListener("change", syncFields);
-loadMeta();
+/* ---------- per-query renderers: each result shape gets its own view ---------- */
+
+const stat = (value, label, tone) =>
+  `<div class="stat ${tone}"><b>${num(value)}</b><span>${esc(label)}</span></div>`;
+
+const depthCell = (d) =>
+  `<span class="depth depth-${Math.min(d, 3)}">${esc(d)}</span>`;
+
+function table(headers, rows) {
+  return `<div class="scroll"><table>
+    <thead><tr>${headers.map((h) => `<th>${esc(h)}</th>`).join("")}</tr></thead>
+    <tbody>${rows}</tbody></table></div>`;
+}
+
+const RENDER = {
+  blast(d) {
+    const m = d.meta;
+    const stats =
+      stat(m.exposed_packages, "packages exposed", "c-pkg") +
+      stat(m.exposed_versions, "versions exposed", "c-ver") +
+      stat(m.max_depth_reached, "max depth", "c-neu") +
+      stat(d.latency_ms + " ms", "traversal", "c-neu");
+    const rows = d.rows.map((r) => `<tr>
+      <td class="pkg">${esc(r.package)}</td>
+      <td class="ver">${esc(r.version)}</td>
+      <td>${depthCell(r.depth)}</td>
+      <td class="range">${esc(r.declared_range)}</td>
+      <td class="neu">${esc(r.via)}</td></tr>`).join("");
+    return stats_and(stats,
+      table(["package", "version", "depth", "declared range", "reached via"], rows), d,
+      "Depth 1 = direct dependent. Deeper rows were reached transitively.");
+  },
+
+  maintainer(d) {
+    const m = d.meta;
+    const who = (m.maintainers || []).map((x) => `<span class="mnt">${esc(x)}</span>`).join(", ");
+    const stats =
+      stat(m.related_packages, "packages reachable", "c-mnt") +
+      stat((m.maintainers || []).length, "maintainer accounts", "c-mnt") +
+      stat(d.latency_ms + " ms", "traversal", "c-neu");
+    const rows = d.rows.map((r) => `<tr>
+      <td class="pkg">${esc(r.package)}</td>
+      <td class="mnt">${esc((r.shared_maintainers || []).join(", "))}</td>
+      <td class="neu">${num(r.downloads)}</td>
+      <td>${r.is_seed ? '<span class="badge in-window">seed</span>' : ""}</td></tr>`).join("");
+    return stats_and(stats,
+      table(["package", "shared maintainer", "downloads", ""], rows), d,
+      `Maintainer accounts on the queried package: ${who || "—"}. ` +
+      `These are the packages that same credential could publish to.`);
+  },
+
+  window(d) {
+    const m = d.meta;
+    const inW = m.in_window || 0, out = m.excluded_after_window || 0;
+    const total = inW + out || 1;
+    const bar = `<div class="split">
+        <i class="inw" style="width:${(inW / total) * 100}%"></i>
+        <i class="outw" style="width:${Math.max((out / total) * 100, 2.5)}%"></i>
+      </div>
+      <div class="legend">
+        <span><i style="background:var(--package)"></i>${num(inW)} resolved to the bad version while it was live</span>
+        <span><i style="background:#2c323b"></i>${num(out)} excluded — published after the window closed</span>
+      </div>`;
+    const stats =
+      stat(inW, "in window", "c-pkg") +
+      stat(out, "excluded", "c-neu") +
+      stat(m.candidates_considered, "candidates", "c-neu") +
+      stat(d.latency_ms + " ms", "traversal", "c-neu");
+    const rows = d.rows.map((r) => `<tr>
+      <td class="pkg">${esc(r.package)}</td>
+      <td class="ver">${esc(r.version)}</td>
+      <td>${depthCell(r.depth)}</td>
+      <td class="neu">${esc((r.published_at || "").replace("T", " ").replace(/\..*$/, ""))}</td>
+      <td><span class="badge in-window">in window</span></td></tr>`).join("");
+    return `<div class="stats">${stats}</div>
+      <div class="mono" style="color:var(--faint);font-size:12.5px;margin-bottom:6px">
+        ${esc(m.window_start)} → ${esc(m.window_end || "open")}
+      </div>${bar}
+      ${table(["package", "version", "depth", "published", "state"], rows)}
+      <div class="note">Only in-window rows are returned by the query, so the
+      ${num(out)} excluded are shown as a count rather than listed —
+      the API reports them in aggregate.</div>`;
+  },
+
+  typosquat(d) {
+    const m = d.meta;
+    if (m.unavailable) {
+      return `<div class="error">${esc(m.unavailable)}</div>`;
+    }
+    const stats =
+      stat(m.candidates, "candidates", "c-adv") +
+      stat(m.target_downloads, "target downloads", "c-neu") +
+      stat(m.max_distance, "max edit distance", "c-neu") +
+      stat(d.latency_ms + " ms", "scan", "c-neu");
+    const rows = d.rows.map((r) => `<tr>
+      <td class="adv">${esc(r.package)}</td>
+      <td class="neu">${esc(r.edit_distance)}</td>
+      <td class="neu">${esc(r.pattern || "—")}</td>
+      <td class="neu">${num(r.downloads)}</td>
+      <td class="ver">${esc(r.score)}</td></tr>`).join("");
+    return stats_and(stats,
+      table(["candidate", "edit distance", "pattern", "downloads", "score"], rows), d,
+      "Name similarity alone is noisy, so candidates are filtered by download " +
+      "count and registration age — a popular near-name is a real package.");
+  },
+
+  introduced(d) {
+    const m = d.meta;
+    const stats =
+      stat(d.rows.length, "packages affected", "c-adv") +
+      stat(m.severity || "—", "severity", "c-adv") +
+      stat(d.latency_ms + " ms", "lookup", "c-neu");
+    const rows = d.rows.map((r) => `<tr>
+      <td class="pkg">${esc(r.package)}</td>
+      <td class="adv">${esc(r.introduced_in)}</td>
+      <td class="ver">${esc(r.likely_patched_in || "—")}</td>
+      <td class="neu">${esc((r.affected_versions || []).join(", "))}</td>
+      <td class="neu">${num(r.total_releases)}</td></tr>`).join("");
+    return stats_and(stats,
+      table(["package", "introduced in", "likely patched in", "affected", "releases"], rows), d,
+      m.published_at ? `Advisory published ${esc(m.published_at)}.` : "");
+  },
+};
+
+function stats_and(stats, tableHtml, d, note) {
+  return `<div class="stats">${stats}</div>${tableHtml}` +
+    (note ? `<div class="note">${note}</div>` : "") +
+    (d.total_rows > d.rows.length
+      ? `<div class="note">Showing ${num(d.rows.length)} of ${num(d.total_rows)} rows.</div>` : "");
+}
+
+async function run() {
+  const out = $("output");
+  out.style.display = "block";
+  out.innerHTML = `<div class="loading"><span class="spinner"></span>
+    running ${esc(KIND)} query over the graph…</div>`;
+  $("run").disabled = true;
+
+  const params = new URLSearchParams({
+    kind: KIND,
+    package: $("pkg").value || "",
+    version: $("ver").value || "",
+    advisory: $("adv").value || "",
+  });
+
+  try {
+    const res = await fetch("/api/query?" + params);
+    const data = await res.json();
+    if (data.error) {
+      out.innerHTML = `<div class="error">${esc(data.error)}</div>`;
+    } else if (!data.rows.length && !(data.meta && data.meta.unavailable)) {
+      out.innerHTML = `<div class="empty">No results. That is a real answer for
+        this graph, not an error — nothing matched the query.</div>`;
+    } else {
+      out.innerHTML = RENDER[KIND](data);
+    }
+  } catch (err) {
+    out.innerHTML = `<div class="error">Request failed: ${esc(err.message)}</div>`;
+  } finally {
+    $("run").disabled = false;
+  }
+}
+
+document.querySelectorAll(".tab").forEach((t) =>
+  t.addEventListener("click", () => applyKind(t.dataset.kind)));
+$("run").addEventListener("click", run);
+$("pkg").addEventListener("change", syncSeed);
+document.addEventListener("keydown", (e) => { if (e.key === "Enter") run(); });
+
+/* ?kind=&package=&version=&run=1 lets a link (or a screenshot run) open
+   straight to a real result instead of an empty panel. */
+function applyUrlParams() {
+  const q = new URLSearchParams(location.search);
+  if (q.get("kind") && FIELDS[q.get("kind")]) applyKind(q.get("kind"));
+  if (q.get("package")) {
+    $("pkg").value = q.get("package");
+    syncSeed();               // prefill defaults for that seed first...
+  }
+  // ...then let explicit URL params win, including deliberately empty ones,
+  // so an error state can be reproduced from a link.
+  if (q.has("version")) $("ver").value = q.get("version");
+  if (q.has("advisory")) $("adv").value = q.get("advisory");
+  return q.get("run") === "1";
+}
+
+applyKind("blast");
+loadMeta().then(() => {
+  const autorun = applyUrlParams();
+  checkParity();
+  if (autorun) run();
+});
 </script>
 </body>
 </html>
