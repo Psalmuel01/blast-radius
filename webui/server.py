@@ -15,9 +15,13 @@ dependencies" claim -- no Flask/Streamlit install required.
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
+import os
 import re
 import sys
+import time
+import urllib.request
 import traceback
 from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -46,6 +50,62 @@ from hydra_blast.queries.typosquat import typosquat_candidates  # noqa: E402
 
 INDEX_HTML = REPO_ROOT / "webui" / "index.html"
 PARITY_FILE = REPO_ROOT / "docs" / "hydra-parity.txt"
+
+# data/graph.json is ~128 MB and gitignored, so a deployed clone has no graph.
+# It is published as a gzipped GitHub Release asset (7.6 MB, byte-identical on
+# decompression) and fetched on first boot. Override for a fork or a new graph.
+GRAPH_URL = os.environ.get(
+    "HYDRA_GRAPH_URL",
+    "https://github.com/Psalmuel01/blast-radius/releases/download/graph-v1/graph.json.gz",
+)
+
+
+def ensure_graph(url: str = GRAPH_URL) -> None:
+    """Download the graph if it is not already on disk.
+
+    Stdlib only. Streams to a temporary file and moves it into place, so an
+    interrupted download cannot leave a half-written graph that then fails to
+    parse on the next boot.
+    """
+    if GRAPH_PATH.exists():
+        return
+    if not url:
+        raise FileNotFoundError(
+            f"no graph at {GRAPH_PATH} and HYDRA_GRAPH_URL is unset -- run "
+            f"`python3 -m hydra_blast crawl --hops 1 --top1 40` to build one"
+        )
+
+    GRAPH_PATH.parent.mkdir(parents=True, exist_ok=True)
+    print(f"  graph.json not found locally, downloading from release: {url}", flush=True)
+
+    tmp = GRAPH_PATH.with_suffix(".json.part")
+    started = time.time()
+    try:
+        with urllib.request.urlopen(url, timeout=300) as response:
+            total = int(response.headers.get("Content-Length") or 0)
+            if total:
+                print(f"  ~{total / 1048576:.1f} MB compressed, decompressing on the fly",
+                      flush=True)
+            # Release assets are served gzipped; decompress as we stream so the
+            # full 128 MB never has to sit in memory at once.
+            decompressor = gzip.GzipFile(fileobj=response)
+            read = 0
+            with open(tmp, "wb") as out:
+                while True:
+                    chunk = decompressor.read(1 << 20)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    read += len(chunk)
+                    if read % (32 << 20) < (1 << 20):
+                        print(f"    {read / 1048576:.0f} MB written…", flush=True)
+        tmp.replace(GRAPH_PATH)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+
+    size = GRAPH_PATH.stat().st_size / 1048576
+    print(f"  graph ready: {size:.1f} MB in {time.time() - started:.1f}s", flush=True)
 
 
 @lru_cache(maxsize=1)
@@ -268,11 +328,16 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--host", default="127.0.0.1")
+    # Hosts inject the port via $PORT and require binding 0.0.0.0; locally the
+    # defaults keep it on loopback so the dev server is not exposed on the LAN.
+    on_host = bool(os.environ.get("PORT"))
+    parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", 8000)))
+    parser.add_argument("--host", default=os.environ.get(
+        "HOST", "0.0.0.0" if on_host else "127.0.0.1"))
     args = parser.parse_args()
 
     try:
+        ensure_graph()
         graph = load_graph()
     except Exception as exc:  # noqa: BLE001
         sys.exit(f"cannot start: {exc}")

@@ -11,3 +11,4 @@ data/*.jsonl
 *.egg-info/
 .pytest_cache/
 .DS_Store
+graph.json.gz
