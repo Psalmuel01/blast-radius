@@ -147,7 +147,7 @@ the timestamps, and the human-readable advisory text queryable together.
 Python 3.10+, no third-party runtime dependencies.
 
 ```bash
-git clone https://github.com/Psalmuel01/hydra-chain.git && cd hydra-chain
+git clone https://github.com/Psalmuel01/blast-radius.git && cd blast-radius
 cp .env.example .env          # add your HydraDB key from https://app.hydradb.com
 ```
 
