@@ -208,6 +208,16 @@ python eval/run_eval.py --cutoff 2025-09-01
 
 Add `--json` for machine-readable output, `--limit N` to show more rows.
 
+## Query UI
+
+A minimal local UI is included for browsing the five core queries without the CLI:
+
+    python3 webui/server.py
+    # open http://127.0.0.1:8000
+
+No third-party dependencies, stdlib http.server only. Read-only, calls the
+same query functions the CLI and eval harness use.
+
 ## Evaluation
 
 `eval/run_eval.py` holds out advisories published on or after a cutoff and
