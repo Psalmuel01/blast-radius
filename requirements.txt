@@ -1,0 +1,6 @@
+# Intentionally empty.
+#
+# This project has no third-party runtime dependencies -- the server, the
+# queries and the graph loader are all Python stdlib. The file exists so
+# buildpack autodetection identifies this as a Python app instead of falling
+# back to another runtime; there is nothing here to install.
